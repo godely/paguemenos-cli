@@ -71,32 +71,49 @@ export async function suggest(site, prefix, limit = 7, request = fetch) {
   if (!text || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
     throw new TypeError('Supply a prefix and a limit from 1 to 50');
   }
-  const url = new URL('/api/intelligent-search/v1/autocomplete-suggestions', site);
-  url.search = new URLSearchParams({ query: text, locale: 'pt-BR', sc: '1' });
-  const response = await request(url, { signal: AbortSignal.timeout(15000) });
-  if (!response.ok) throw new Error('Pague Menos suggestions HTTP ' + response.status);
-  const data = await response.json();
-  if (!Array.isArray(data.searches)) throw new Error('Unexpected suggestions response');
   const [typed, ...qualifiers] = words(text);
   if (!typed) return [];
+  async function lookup(endpoint, extra = {}) {
+    const url = new URL('/api/intelligent-search/v1/' + endpoint, site);
+    url.search = new URLSearchParams({ query: text, locale: 'pt-BR', sc: '1', ...extra });
+    const response = await request(url, { signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error('Pague Menos suggestions HTTP ' + response.status);
+    return response.json();
+  }
+  const [data, catalog] = await Promise.all([lookup('autocomplete-suggestions'),
+    lookup('product-search', { count: '12', page: '1' })]);
+  if (!Array.isArray(data.searches) || !Array.isArray(catalog.products)) throw new Error('Unexpected suggestions response');
+
+  const supported = new Map();
+  const plausible = name => name && (name.startsWith(typed) || closeSpelling(typed, name));
+  for (const product of catalog.products) {
+    const actives = product.properties?.find(p => p.name === 'NomeSubstanciaPrincipioAtivo')?.values;
+    const names = new Set([fold(product.brand), words(product.productName)[0], ...words(actives)]);
+    for (const name of names) {
+      if (/^[a-z]+$/.test(name) && plausible(name)) supported.set(name, (supported.get(name) ?? 0) + 1);
+    }
+  }
   const suggestions = new Map();
-  for (const hit of data.searches) {
-    if (typeof hit?.term !== 'string') continue;
-    const term = hit.term.trim();
+  function add(term, count = 0) {
     const tokens = words(term);
     const [name, ...tail] = tokens;
     const key = tokens.join(' ');
-    if (!name || suggestions.has(key)) continue;
-    if (!name.startsWith(typed) && !closeSpelling(typed, name)) continue;
-    // A spelling correction must preserve an explicit strength, release or pack.
-    if (qualifiers.length && qualifiers.join(' ') !== tail.join(' ')) continue;
-    suggestions.set(key, term);
+    if (!plausible(name) || suggestions.has(key)) return;
+    // Preserve every explicit presentation constraint when correcting the name.
+    if (qualifiers.length && qualifiers.join(' ') !== tail.join(' ')) return;
+    suggestions.set(key, {term, name, bare: tail.length === 0, count: Number(count) || 0});
   }
-  const terms = [...suggestions.values()];
-  if (terms.length && !qualifiers.length) {
-    const [leadingName] = words(terms[0]);
-    const bare = terms.findIndex(term => words(term).join(' ') === leadingName);
-    if (bare > 0) terms.unshift(...terms.splice(bare, 1));
+  for (const hit of data.searches) {
+    if (typeof hit?.term === 'string') add(hit.term.trim(), hit.count);
   }
-  return terms.slice(0, limit);
+  if (!qualifiers.length) for (const name of supported.keys()) add(name);
+
+  // Confirm a catalog identity first. Within comparable candidates prefer an
+  // actual prefix and a whole name, then use the storefront's search frequency.
+  const ranked = [...suggestions.values()].sort((a, b) =>
+    Number(supported.has(b.name)) - Number(supported.has(a.name)) ||
+    Number(b.name.startsWith(typed)) - Number(a.name.startsWith(typed)) ||
+    Number(b.bare) - Number(a.bare) || b.count - a.count ||
+    (supported.get(b.name) ?? 0) - (supported.get(a.name) ?? 0));
+  return ranked.slice(0, limit).map(option => option.term);
 }
