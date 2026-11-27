@@ -39,3 +39,21 @@ test('stockout zero-price placeholders do not become free offers', async () => {
   const [row]=await retailer.product('9');
   assert.equal(row.inStock,false); assert.equal(row.currentPrice,null); assert.equal(row.listPrice,null);
 });
+
+test('a single fulfillment simulation aggregates repeat SKUs and uses only matching seller lines and SLAs', async () => {
+  const calls=[];
+  const provider=createRetailer({name:'Example',site:'https://example.invalid'},async (_url,init)=>{
+    calls.push(JSON.parse(init.body).items);
+    return Response.json({items:[{id:'2',seller:'1',availability:'available',quantity:1,sellingPrice:505},
+      {id:'1',seller:'1',availability:'available',quantity:2,sellingPrice:400}],
+      logisticsInfo:[{itemIndex:0,itemId:'2',slas:[{deliveryChannel:'pickup-in-point',pickupPointId:'B'}]},
+        {itemIndex:1,itemId:'1',slas:[{deliveryChannel:'pickup-in-point',pickupPointId:'A'}]}]});
+  });
+  const row=sku=>({sku,sellerId:'1'});
+  const got=await provider.basket([{offer:row('1'),quantity:2},{offer:row('2'),quantity:1},{offer:row('1'),quantity:1}],'01001000');
+  assert.deepEqual(calls,[[{id:'1',seller:'1',quantity:3},{id:'2',seller:'1',quantity:1}]]);
+  assert.equal(got[0].localStatus,'unverified');
+  assert.deepEqual(got[0].methods,[]);
+  assert.equal(got[1].currentPrice,5.05);
+  assert.equal(got[1].methods[0].pickupPointId,'B');
+});
