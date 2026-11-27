@@ -16,6 +16,7 @@ function product(id, name, ingredient) {
 
 test('suggest uses public query completions, deduplicates doses and ignores product previews', async () => {
   const terms = await suggest(site, 'morfi', 7, async (url, options) => {
+    if (url.pathname.endsWith('/product-search')) return Response.json({products:[]});
     assert.equal(url.pathname, '/api/intelligent-search/v1/autocomplete-suggestions');
     assert.equal(url.searchParams.get('query'), 'morfi');
     assert.equal(options.headers, undefined);
@@ -51,7 +52,8 @@ test('verified search paginates matched products and keeps matching sellers and 
 });
 
 test('accepts retailer-backed typing errors, prefers the bare name and keeps explicit qualifiers', async () => {
-  const terms = (...names) => async () => Response.json({ searches: names.map(term => ({term})) });
+  const terms = (...names) => async url => Response.json(url.pathname.endsWith('/product-search')
+    ? {products:[]} : {searches: names.map(term => ({term}))});
   assert.deepEqual(await suggest(site, 'rivtoril', 1, terms('Rivotril 2mg', 'Rivotril')), ['Rivotril']);
   assert.deepEqual(await suggest(site, 'morfian 10 mg', 7,
     terms('morfina', 'morfina 10mg/mL', 'morfina 10mg', 'morfina 30mg')), ['morfina 10mg']);
@@ -94,4 +96,21 @@ test('CLI offers completions on an empty first page without searching the sugges
   assert.equal(retailer.suggest.mock.callCount(), 1);
   await run(retailer, ['suggest', 'morfi', '--json'], 'paguemenos');
   assert.deepEqual(JSON.parse(printed.mock.calls.at(-1).arguments[0]), ['morfina', 'morfina 10mg']);
+});
+
+test('prefers catalog-backed names over query fragments or popular unrelated product cards', async () => {
+  const fetchFixture = async url => Response.json(url.pathname.endsWith('/product-search') ? {products:[
+    {brand:'Outra', productName:'Outro produto', description:'paracetamol'},
+    {brand:'Paracetamol', productName:'Paracetamol 750mg', categories:['/Medicamentos e Saúde/']},
+  ]} : {searches:[{term:'paraceta',count:80},{term:'paracetamol infantil',count:60}]});
+  assert.equal((await suggest(site,'paracet',1,fetchFixture))[0], 'paracetamol');
+  assert.equal((await suggest(site,'parassettamol',1,fetchFixture))[0], 'paracetamol');
+  assert.deepEqual(await suggest(site,'zzxqvbrt',7,fetchFixture), []);
+});
+
+test('a cosmetic kit cannot outrank a medication spelling suggested by the storefront', async () => {
+  const request = async url => Response.json(url.pathname.endsWith('/product-search')
+    ? {products:[{productName:'Rotina de skincare', categories:['/Dermo e Beleza/']}]}
+    : {searches:[{term:'morfina', count:167}]});
+  assert.deepEqual(await suggest(site,'mrofina',7,request), ['morfina']);
 });
