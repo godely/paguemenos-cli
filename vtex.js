@@ -7,23 +7,36 @@ export function validGtin(code) {
   return digits.reduce((sum, n, i) => sum + n * (i % 2 ? 3 : 1), 0) % 10 === 0;
 }
 
-export function createRetailer({ name, site }, request = fetch) {
-  async function json(path, options = {}) {
+export function createRetailer({ name, site, prepareSearch }, request = fetch) {
+  async function getResponse(path, options = {}) {
     const response = await request(new URL(path, site), { ...options, signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(name + ' HTTP ' + response.status);
-    return response.json();
+    return response;
   }
 
-  async function catalog(params, page = 1, limit = 20) {
+  function checkPage(page, limit) {
     if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
       throw new TypeError('page must be positive and limit must be 1 to 50');
     }
+  }
+
+  async function catalogPage(params, page, limit) {
+    checkPage(page, limit);
     const start = (page - 1) * limit;
-    const data = await json('/api/catalog_system/pub/products/search?' + new URLSearchParams({
+    const query = new URLSearchParams({
       ...params, _from: String(start), _to: String(start + limit - 1),
-    }));
+    }).toString().replaceAll('+', '%20');
+    const response = await getResponse('/api/catalog_system/pub/products/search?' + query);
+    const data = await response.json();
     if (!Array.isArray(data)) throw new Error('Unexpected catalog response');
-    return data.flatMap(product => product.items.flatMap(item => item.sellers.map(seller => {
+    const range = /^(\d+)-\d+\/(\d+)$/.exec(response.headers.get('resources') ?? '');
+    if (range && Number(range[1]) !== start) throw new Error('Unexpected catalog result range');
+    const finished = data.length < limit || (range !== null && start + data.length >= Number(range[2]));
+    return { products: data, finished };
+  }
+
+  function offers(product) {
+    return product.items.flatMap(item => item.sellers.map(seller => {
       const offer = seller.commertialOffer ?? {};
       const facts = Object.fromEntries((product.allSpecifications ?? []).map(key => [key, product[key]]));
       return { retailer: name, sku: String(item.itemId), gtin: validGtin(String(item.ean)) ? String(item.ean) : null,
@@ -31,7 +44,32 @@ export function createRetailer({ name, site }, request = fetch) {
         sellerId: String(seller.sellerId), seller: seller.sellerName, currency: 'BRL', currentPrice: offer.IsAvailable === false && offer.Price === 0 ? null : price(offer.Price),
         listPrice: offer.IsAvailable === false && offer.ListPrice === 0 ? null : price(offer.ListPrice), inStock: typeof offer.IsAvailable === 'boolean' ? offer.IsAvailable : null,
         priceScope: 'anonymous_online', observedAt: new Date().toISOString(), facts };
-    })));
+    }));
+  }
+
+  async function catalog(params, page = 1, limit = 20) {
+    const { products } = await catalogPage(params, page, limit);
+    return products.flatMap(offers);
+  }
+
+  async function search(query, page = 1, limit = 20) {
+    checkPage(page, limit);
+    if (!prepareSearch) return catalog({ ft: query }, page, limit);
+    const { text, matches } = prepareSearch(query);
+    const start = (page - 1) * limit;
+    const rows = [];
+    let matched = 0;
+    for (let sourcePage = 1; ; sourcePage++) {
+      const { products, finished } = await catalogPage({ ft: text }, sourcePage, 50);
+      for (const product of products) {
+        const accepted = offers(product).filter(matches);
+        if (!accepted.length) continue;
+        if (matched >= start) rows.push(...accepted);
+        matched++;
+        if (matched - start === limit) return rows;
+      }
+      if (finished) return rows;
+    }
   }
 
   async function byGtin(gtin) {
@@ -44,10 +82,11 @@ export function createRetailer({ name, site }, request = fetch) {
   }
   async function local(offer, zipcode, quantity = 1) {
     if (!/^\d{5}-?\d{3}$/.test(zipcode) || !Number.isSafeInteger(quantity) || quantity < 1) throw new TypeError('Invalid CEP or quantity');
-    const data = await json('/api/checkout/pub/orderForms/simulation', { method: 'POST',
+    const response = await getResponse('/api/checkout/pub/orderForms/simulation', { method: 'POST',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
         country: 'BRA', postalCode: zipcode.replace('-', ''), items: [{ id: offer.sku, seller: offer.sellerId, quantity }],
       }) });
+    const data = await response.json();
     if (!Array.isArray(data.items) || !Array.isArray(data.logisticsInfo)) throw new Error('Unexpected simulation response');
     const index = data.items.findIndex(i => String(i.id) === offer.sku && String(i.seller) === offer.sellerId);
     const item = data.items[index];
@@ -61,5 +100,5 @@ export function createRetailer({ name, site }, request = fetch) {
       ...(verified ? { currentPrice: cents(item.sellingPrice), listPrice: cents(item.listPrice) } : {}),
       requestedQuantity: quantity, methods: verified ? methods : [], observedAt: new Date().toISOString() };
   }
-  return { name, site, search: (query, page, limit) => catalog({ ft: query }, page, limit), product, byGtin, local };
+  return { name, site, search, product, byGtin, local };
 }
