@@ -88,6 +88,11 @@ export async function suggest(site, prefix, limit = 7, request = fetch) {
   const plausible = name => name && (name.startsWith(typed) || closeSpelling(typed, name));
   for (const product of catalog.products) {
     const actives = product.properties?.find(p => p.name === 'NomeSubstanciaPrincipioAtivo')?.values;
+    // General storefront searches also return cosmetic kits and accessories.
+    // Their titles cannot establish that a lookalike is a medication name.
+    const medicine = Array.isArray(actives) && actives.length ||
+      product.categories?.some(path => /^\/medicamentos(?: e saude)?\//.test(fold(path)));
+    if (!medicine) continue;
     const names = new Set([fold(product.brand), words(product.productName)[0], ...words(actives)]);
     for (const name of names) {
       if (/^[a-z]+$/.test(name) && plausible(name)) supported.set(name, (supported.get(name) ?? 0) + 1);

@@ -101,9 +101,16 @@ test('CLI offers completions on an empty first page without searching the sugges
 test('prefers catalog-backed names over query fragments or popular unrelated product cards', async () => {
   const fetchFixture = async url => Response.json(url.pathname.endsWith('/product-search') ? {products:[
     {brand:'Outra', productName:'Outro produto', description:'paracetamol'},
-    {brand:'Paracetamol', productName:'Paracetamol 750mg'},
+    {brand:'Paracetamol', productName:'Paracetamol 750mg', categories:['/Medicamentos e Saúde/']},
   ]} : {searches:[{term:'paraceta',count:80},{term:'paracetamol infantil',count:60}]});
   assert.equal((await suggest(site,'paracet',1,fetchFixture))[0], 'paracetamol');
   assert.equal((await suggest(site,'parassettamol',1,fetchFixture))[0], 'paracetamol');
   assert.deepEqual(await suggest(site,'zzxqvbrt',7,fetchFixture), []);
+});
+
+test('a cosmetic kit cannot outrank a medication spelling suggested by the storefront', async () => {
+  const request = async url => Response.json(url.pathname.endsWith('/product-search')
+    ? {products:[{productName:'Rotina de skincare', categories:['/Dermo e Beleza/']}]}
+    : {searches:[{term:'morfina', count:167}]});
+  assert.deepEqual(await suggest(site,'mrofina',7,request), ['morfina']);
 });
