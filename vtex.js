@@ -28,8 +28,8 @@ export function createRetailer({ name, site }, request = fetch) {
       const facts = Object.fromEntries((product.allSpecifications ?? []).map(key => [key, product[key]]));
       return { retailer: name, sku: String(item.itemId), gtin: validGtin(String(item.ean)) ? String(item.ean) : null,
         name: item.nameComplete || item.name, itemName: item.name, brand: product.brand, productUrl: product.link,
-        sellerId: String(seller.sellerId), seller: seller.sellerName, currency: 'BRL', currentPrice: price(offer.Price),
-        listPrice: price(offer.ListPrice), inStock: typeof offer.IsAvailable === 'boolean' ? offer.IsAvailable : null,
+        sellerId: String(seller.sellerId), seller: seller.sellerName, currency: 'BRL', currentPrice: offer.IsAvailable === false && offer.Price === 0 ? null : price(offer.Price),
+        listPrice: offer.IsAvailable === false && offer.ListPrice === 0 ? null : price(offer.ListPrice), inStock: typeof offer.IsAvailable === 'boolean' ? offer.IsAvailable : null,
         priceScope: 'anonymous_online', observedAt: new Date().toISOString(), facts };
     })));
   }
@@ -51,10 +51,11 @@ export function createRetailer({ name, site }, request = fetch) {
     if (!Array.isArray(data.items) || !Array.isArray(data.logisticsInfo)) throw new Error('Unexpected simulation response');
     const index = data.items.findIndex(i => String(i.id) === offer.sku && String(i.seller) === offer.sellerId);
     const item = data.items[index];
-    const slas = data.logisticsInfo.find(l => l.itemIndex === index)?.slas ?? [];
+    const logistics = data.logisticsInfo.find(l => l.itemIndex === index && (l.itemId == null || String(l.itemId) === offer.sku));
+    const slas = (logistics?.slas ?? []).filter(s => s && ['delivery', 'pickup-in-point'].includes(s.deliveryChannel));
     const verified = !!item && item.availability === 'available' && item.quantity >= quantity && slas.length > 0;
     const methods = slas.map(s => ({ channel: s.deliveryChannel, service: s.id, feeBRL: cents(s.price),
-      branch: s.pickupStoreInfo?.friendlyName || null, address: s.pickupStoreInfo?.address || null }));
+      pickupPointId: s.pickupPointId || null, branch: s.pickupStoreInfo?.friendlyName || null, address: s.pickupStoreInfo?.address || null }));
     return { ...offer, priceScope: verified ? 'verified_for_cep' : 'anonymous_online',
       localStatus: verified ? 'available' : item?.availability === 'withoutStock' ? 'unavailable' : 'unverified',
       ...(verified ? { currentPrice: cents(item.sellingPrice), listPrice: cents(item.listPrice) } : {}),
