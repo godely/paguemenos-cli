@@ -43,6 +43,29 @@ export function prepareSearch(query) {
   return { text, matches };
 }
 
+// Restricted Damerau-Levenshtein distance gives one edit to adjacent swaps.
+// Only compare names already proposed by the retailer.
+function closeSpelling(typed, candidate) {
+  if (!/^[a-z]{4,48}$/.test(typed) || !/^[a-z]{4,48}$/.test(candidate)) return false;
+  const limit = typed.length >= 11 ? 3 : typed.length >= 7 ? 2 : 1;
+  if (Math.abs(typed.length - candidate.length) > limit) return false;
+  let previous = Array.from({ length: candidate.length + 1 }, (_, i) => i);
+  let older;
+  for (let i = 1; i <= typed.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= candidate.length; j++) {
+      row[j] = Math.min(previous[j] + 1, row[j - 1] + 1,
+        previous[j - 1] + Number(typed[i - 1] !== candidate[j - 1]));
+      if (i > 1 && j > 1 && typed[i - 1] === candidate[j - 2] && typed[i - 2] === candidate[j - 1]) {
+        row[j] = Math.min(row[j], older[j - 2] + 1);
+      }
+    }
+    older = previous;
+    previous = row;
+  }
+  return previous[candidate.length] <= limit;
+}
+
 export async function suggest(site, prefix, limit = 7, request = fetch) {
   const text = String(prefix ?? '').trim();
   if (!text || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
@@ -54,14 +77,26 @@ export async function suggest(site, prefix, limit = 7, request = fetch) {
   if (!response.ok) throw new Error('Pague Menos suggestions HTTP ' + response.status);
   const data = await response.json();
   if (!Array.isArray(data.searches)) throw new Error('Unexpected suggestions response');
+  const [typed, ...qualifiers] = words(text);
+  if (!typed) return [];
   const suggestions = new Map();
   for (const hit of data.searches) {
     if (typeof hit?.term !== 'string') continue;
     const term = hit.term.trim();
-    const key = words(term).join(' ');
-    if (!key || !fold(term).startsWith(fold(text)) || suggestions.has(key)) continue;
+    const tokens = words(term);
+    const [name, ...tail] = tokens;
+    const key = tokens.join(' ');
+    if (!name || suggestions.has(key)) continue;
+    if (!name.startsWith(typed) && !closeSpelling(typed, name)) continue;
+    // A spelling correction must preserve an explicit strength, release or pack.
+    if (qualifiers.length && qualifiers.join(' ') !== tail.join(' ')) continue;
     suggestions.set(key, term);
-    if (suggestions.size === limit) break;
   }
-  return [...suggestions.values()];
+  const terms = [...suggestions.values()];
+  if (terms.length && !qualifiers.length) {
+    const [leadingName] = words(terms[0]);
+    const bare = terms.findIndex(term => words(term).join(' ') === leadingName);
+    if (bare > 0) terms.unshift(...terms.splice(bare, 1));
+  }
+  return terms.slice(0, limit);
 }
