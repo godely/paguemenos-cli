@@ -3,12 +3,18 @@ Independent read-only CLI for the Brazilian Pague Menos catalog. Requires Node 2
 
 ```sh
 node cli.js search paracetamol --limit 10
+node cli.js suggest morfi --json
+node cli.js search "morfina 10 mg"
 node cli.js product 1633706 --json
 node cli.js gtin 7899547543766 --json
 node cli.js info 1633706
 node cli.js stock 1633706 --cep "$CEP"
 ```
 
-Search pagination counts catalog products. Each product can contain several SKUs and sellers. Product details include the retailer's original specification fields. Stock performs an anonymous, non-purchasing VTEX simulation for the exact SKU, seller, requested quantity and CEP. A returned method confirms fulfillment for that request. A pickup method does not establish how many packs are on a shelf. Online and locally verified prices use separate scope labels. Missing seller or location evidence remains unknown.
+`suggest` returns search terms from the public VTEX autocomplete endpoint. It uses no storefront API key and merges spelling variants such as `10 mg` and `10mg`. An empty first search page prompts with the first alternative. Run `search` with the chosen term to see products. With `--json`, results go to stdout and the hint goes to stderr. Exit code 3 means an empty result.
+
+`search` checks whole words against the start of the SKU title, the catalog brand, or the active ingredient. It checks additional words and quantities against the title and structured fields. Mentions in descriptions and autocomplete preview cards do not qualify a product. Missing identity evidence can omit a relevant product. Pagination counts matching catalog products. Each can contain several matched SKUs or sellers. The library exposes the same operations as `retailer.suggest(prefix, limit)` and `retailer.search(query, page, limit)`.
+
+Product details include the retailer's original specification fields. Stock performs an anonymous, non-purchasing VTEX simulation for the exact SKU, seller, requested quantity and CEP. A returned method confirms fulfillment for that request. A pickup method does not establish how many packs are on a shelf. Online and locally verified prices use separate scope labels. Missing seller or location evidence remains unknown.
 
 [Public storefront](https://www.paguemenos.com.br/) · [VTEX Checkout API](https://developers.vtex.com/docs/api-reference/checkout-api)
