@@ -50,6 +50,15 @@ test('verified search paginates matched products and keeps matching sellers and 
   assert.deepEqual(await retailer.search('morfina 10 mg', 3, 1), []);
 });
 
+test('accepts retailer-backed typing errors, prefers the bare name and keeps explicit qualifiers', async () => {
+  const terms = (...names) => async () => Response.json({ searches: names.map(term => ({term})) });
+  assert.deepEqual(await suggest(site, 'rivtoril', 1, terms('Rivotril 2mg', 'Rivotril')), ['Rivotril']);
+  assert.deepEqual(await suggest(site, 'morfian 10 mg', 7,
+    terms('morfina', 'morfina 10mg/mL', 'morfina 10mg', 'morfina 30mg')), ['morfina 10mg']);
+  assert.deepEqual(await suggest(site, 'frnotal xr', 7, terms('Frontal', 'Frontal XR')), ['Frontal XR']);
+  assert.deepEqual(await suggest(site, 'zzqvzz', 7, terms('vitamina', 'dipirona')), []);
+});
+
 test('matches whole identity tokens and explicit strengths, resisting mention-only and lookalike results', () => {
   function match(query, name, ingredient, dosage, brand) {
     return prepareSearch(query).matches({ name, brand, facts: { NomeSubstanciaPrincipioAtivo: [ingredient],
