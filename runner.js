@@ -150,6 +150,9 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
       if (result.lowestPricedPickup) console.log('Menor preço com retirada confirmada:', result.lowestPricedPickup.name,
         '—', result.lowestPricedPickup.currentPrice.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}));
       printQuotes(result.products);
+      for (const table of result.tables ?? []) {
+        if (table.registeredPresentation) console.log(purchaseCatalogNotice(table));
+      }
     }
     else if(result.pendingBrands) console.log('Quer considerar genéricos para '+result.pendingBrands.join(', ')+'?');
     else {
@@ -208,6 +211,11 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     }
     if(!v.json && result.fixedStore) printFixedStore(result.fixedStore);
     if(v.json) console.log(JSON.stringify(result,null,2));
+    else if (result.requestedBrand?.status==='listed' && result.registeredPresentation) {
+      if (origin) printQuotes(result.products);
+      else emit(result.products,false,['name','type','currentPrice']);
+      console.log(purchaseCatalogNotice(result));
+    }
     else if (result.registeredPresentation || result.presentationChoices?.length || (result.status === 'no_match' && result.requestedBrand)) console.log(purchaseCatalogNotice(result));
     else {
       console.log(result.status);
