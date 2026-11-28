@@ -1,6 +1,7 @@
 import { quoteShoppingList, shoppingItems } from './partner-plan.js';
 import { parseArgs } from 'node:util';
-import { catalogInfo, catalogSnapshot, retailerComparison, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
+import { catalogInfo, catalogSnapshot, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
+import { compareOffers } from './compare.js';
 import { checkoutOrigin, point } from './location.js';
 import { validGtin } from './vtex.js';
 
@@ -9,14 +10,14 @@ const usage = {
   search: 'search <text> [--page N --limit N]', suggest: 'suggest <prefix> [--limit N]',
   product: 'product <SKU> [<SKU> ...]', gtin: 'gtin <EAN>',
   info: 'info <name or SKU> [<name or SKU> ...] [--brazil]',
-  compare: 'compare <name or SKU> [--brand-only]',
+  compare: 'compare <name or SKU> [--brand-only] [--cep CEP | --lat LAT --lon LON]',
   stock: 'stock <SKU> (--cep CEP | --lat LAT --lon LON) [--min-qty N | --quantity N]',
   stores: 'stores [--cep CEP | --lat LAT --lon LON]',
   snapshot: 'snapshot collect <query...> [--limit N] | read <run-id> [--offset N --limit N] | export <run-id> --format json|csv|xlsx',
 };
 const flags = {
   plan:['cep','lat','lon','quantity','sku','brand','generic','brand-only','include-generics'],
-  search:['page','limit'], suggest:['limit'], product:[], gtin:[], info:['brazil'], compare:['brand-only'],
+  search:['page','limit'], suggest:['limit'], product:[], gtin:[], info:['brazil'], compare:['brand-only','cep','lat','lon'],
   stock:['cep','lat','lon','min-qty','quantity'], stores:['cep','lat','lon'], snapshot:['limit','offset','format'],
 };
 const usageError = msg => { console.error(msg); process.exitCode = 1; };
@@ -56,6 +57,7 @@ export async function run(source, argv, bin) {
     if (command !== 'stores' && !words.length) throw Error(usage[command]);
     if (command === 'stock' || command === 'plan' || (command === 'stores' && (source.directoryScope==='near_origin' || v.cep || v.lat || v.lon))) origin=location(v);
     if (command === 'stores' && words.length) throw Error(usage.stores);
+    if (command === 'compare' && [v.cep,v.lat,v.lon].some(x=>x!==undefined)) origin=location(v);
     if (command === 'stock' && (words.length!==1 || !/^\d+$/.test(words[0]) || (v.quantity != null && v['min-qty'] != null))) throw Error(usage.stock);
     if (command === 'product' && !words.every(x=>/^\d+$/.test(x))) throw Error(usage.product);
     if (command === 'gtin' && (words.length!==1 || !validGtin(words[0]))) throw Error(usage.gtin);
@@ -99,10 +101,16 @@ export async function run(source, argv, bin) {
     return;
   }
   if (command==='compare') {
-    const result=await retailerComparison({retailer:bin,query,includeGenerics:!v['brand-only']},source);
+    const place=typeof origin==='string' ? {zipcode:origin} : {coordinates:origin};
+    const result=await compareOffers({retailer:bin,query,includeGenerics:!v['brand-only'],...place},source);
     if(v.json) console.log(JSON.stringify(result,null,2));
-    else { console.log(result.status);emit(result.candidates??result.products??[],false,['sku','name','type','currentPrice']); }
-    if(result.status==='partial') process.exitCode=2;
+    else {
+      console.log(result.status);
+      const rows=result.candidates??result.products??[];
+      if(origin && result.stockEvidence) printQuotes(rows);
+      else emit(rows,false,['sku','name','type','currentPrice']);
+    }
+    if(['source_failed','partial'].includes(result.status)) process.exitCode=2;
     else if(result.status!=='matches') process.exitCode=3;
     return;
   }
@@ -144,6 +152,15 @@ export async function run(source, argv, bin) {
       rows=local;
     }
   }
-  emit(rows,v.json || command==='stock',columns);
+  if(command==='stock' && !v.json) printQuotes(rows);
+  else emit(rows,v.json,columns);
   if(!rows.length) process.exitCode=3;
+}
+
+function printQuotes(rows) {
+  console.table(rows.map(row=>({
+    SKU:row.sku, Medicamento:row.name, Tipo:row.type??'Não informado', Preço:row.currentPrice,
+    'Origem do preço':row.priceScope, Atendimento:row.localStatus,
+    'Qtd. solicitada':row.requestedQuantity, 'Retirada ofertada':row.methods?.filter(m=>m.channel==='pickup-in-point').map(m=>m.branch||m.pickupPointId).join(', ')||'—',
+  })));
 }

@@ -12,7 +12,8 @@
   "exports": {
     ".": "./index.js",
     "./vtex": "./vtex.js",
-    "./runner": "./runner.js"
+    "./runner": "./runner.js",
+    "./compare": "./compare.js"
   },
   "scripts": {
     "test": "node --test"

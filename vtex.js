@@ -120,7 +120,9 @@ function quoteLine(offer, quantity, data, verifiedScope) {
   const slas = (logistics?.slas ?? []).filter(s => s && ['delivery', 'pickup-in-point'].includes(s.deliveryChannel));
   const verified = !!item && item.availability === 'available' && item.quantity >= quantity && slas.length > 0;
   const methods = slas.map(s => ({ channel: s.deliveryChannel, service: s.id, feeBRL: cents(s.price),
-    pickupPointId: s.pickupPointId || null, branch: s.pickupStoreInfo?.friendlyName || null, address: s.pickupStoreInfo?.address || null }));
+    pickupPointId: s.pickupPointId || null, branch: s.pickupStoreInfo?.friendlyName || null,
+    distanceKm: Number.isFinite(s.pickupDistance) && s.pickupDistance >= 0 ? s.pickupDistance : null,
+    address: s.pickupStoreInfo?.address || null }));
   return { ...offer, priceScope: verified ? verifiedScope : 'anonymous_online',
     localStatus: verified ? 'available' : item?.availability === 'withoutStock' ? 'unavailable' : 'unverified',
     ...(verified ? { currentPrice: cents(item.sellingPrice), listPrice: cents(item.listPrice) } : {}),
