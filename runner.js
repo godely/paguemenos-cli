@@ -1,6 +1,6 @@
 import { quoteShoppingList, shoppingItems } from './partner-plan.js';
 import { parseArgs } from 'node:util';
-import { catalogInfo, catalogSnapshot, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
+import { catalogInfo, catalogSnapshot, catalogType, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
 import { compareOffers } from './compare.js';
 import { checkoutOrigin, point } from './location.js';
 import { validGtin } from './vtex.js';
@@ -159,7 +159,7 @@ export async function run(source, argv, bin) {
 
 function printQuotes(rows) {
   console.table(rows.map(row=>({
-    SKU:row.sku, Medicamento:row.name, Tipo:row.type??'Não informado', Preço:row.currentPrice,
+    SKU:row.sku, Medicamento:row.name, Tipo:row.type??catalogType(row), Preço:row.currentPrice,
     'Origem do preço':row.priceScope, Atendimento:row.localStatus,
     'Qtd. solicitada':row.requestedQuantity, 'Retirada ofertada':row.methods?.filter(m=>m.channel==='pickup-in-point').map(m=>m.branch||m.pickupPointId).join(', ')||'—',
   })));

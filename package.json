@@ -13,7 +13,8 @@
     ".": "./index.js",
     "./vtex": "./vtex.js",
     "./runner": "./runner.js",
-    "./compare": "./compare.js"
+    "./compare": "./compare.js",
+    "./plan": "./partner-plan.js"
   },
   "scripts": {
     "test": "node --test"
