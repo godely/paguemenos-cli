@@ -1,4 +1,4 @@
-import { hasPickupOffer, physicalShopping, permitsStockExpansion } from './branch-shopping.js';
+import { hasPickupOffer, physicalShopping, permitsStockExpansion, referencePresentations } from './branch-shopping.js';
 import { inventoryConfig } from './branch-inventory.js';
 import { crossRetailerPlans } from './pickup-plans.js';
 import { fixedStoreSource, quoteLocalOptions } from './compare.js';
@@ -135,7 +135,8 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
     }
     const choices=new Set(rows.map(p=>p.sku));
     const verifiedChoices = rows.filter(row=>row.sku && row.sellerId).map(({sku,sellerId})=>({sku,sellerId}));
-    tables.push({query:item.query,status:selection.status,choices:selection.candidates??rows,verifiedChoices});
+    tables.push({query:item.query,status:selection.status,choices:selection.candidates??rows,verifiedChoices,
+      ...referencePresentations(selection)});
     if (choices.size===1) lines.push({sku:rows[0].sku,quantity:item.quantity ?? 1});
   }
   if(lines.length!==items.length) return withInventory({retailerId:retailer,status:'choose_products',tables});
