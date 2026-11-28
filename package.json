@@ -14,12 +14,13 @@
     "./vtex": "./vtex.js",
     "./runner": "./runner.js",
     "./compare": "./compare.js",
-    "./plan": "./partner-plan.js"
+    "./plan": "./partner-plan.js",
+    "./branch-inventory": "./branch-inventory.js"
   },
   "scripts": {
     "test": "node --test"
   },
   "dependencies": {
-    "drogasil-cli": "https://codeload.github.com/godely/drogasil-cli/tar.gz/b3efb1719e9c943321b7ce24a3235ce721644787"
+    "drogasil-cli": "https://codeload.github.com/godely/drogasil-cli/tar.gz/f89e5814391b69ca72d519b28b2bced6a1c58082"
   }
 }

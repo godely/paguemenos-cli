@@ -1,3 +1,5 @@
+import { physicalShopping } from './branch-shopping.js';
+import { inventoryConfig } from './branch-inventory.js';
 import { retailerComparison } from 'drogasil-cli/retailer-workflows';
 
 // Checkout can verify a requested quantity through a pickup point. The exact
@@ -6,6 +8,18 @@ export async function compareOffers(args, source, compare = retailerComparison) 
   const result = await compare(args, source);
   const origin = args.coordinates ?? args.zipcode;
   if (!origin || !result.products?.length) return result;
+  const config=inventoryConfig(args.retailer);
+  if (args.store || args.expandSearch || config) {
+    const purchase=await physicalShopping(args.retailer,source,[{query:args.query,includeGenerics:args.includeGenerics}],
+      [result],origin,args,config);
+    const table=purchase.tables[0];
+    const bySku=new Map(table.rows.map(row=>[row.sku,row]));
+    const products=result.products.map(row=>{
+      const store=bySku.get(row.sku)?.store ?? null;
+      return {...row, closestStore:store, branchQuantity:store?.quantity ?? null};
+    });
+    return {...result,products,purchase,stockEvidence:purchase.stockEvidence};
+  }
   const products = [];
   let failures = 0;
   for (const row of result.products) {
