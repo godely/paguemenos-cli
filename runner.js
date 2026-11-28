@@ -7,18 +7,18 @@ import { checkoutOrigin, point } from './location.js';
 import { validGtin } from './vtex.js';
 
 const usage = {
-  plan: 'plan <medication or SKU> ... (--cep CEP | --lat LAT --lon LON) [--quantity A=N] [--sku A=SKU] [--brand A=name] [--generic A] [--brand-only A | --include-generics A]',
+  plan: 'plan <medication or SKU> ... (--cep CEP | --lat LAT --lon LON) [--quantity A=N] [--sku A=SKU] [--store nearest] [--brand A=name] [--generic A] [--brand-only A | --include-generics A]',
   search: 'search <text> [--page N --limit N]', suggest: 'suggest <prefix> [--limit N]',
   product: 'product <SKU> [<SKU> ...]', gtin: 'gtin <EAN>',
   info: 'info <name or SKU> [<name or SKU> ...] [--brazil]',
-  compare: 'compare <name or SKU> [--brand-only] [--cep CEP | --lat LAT --lon LON]',
+  compare: 'compare <name or SKU> [--store nearest|ID] [--brand-only] [--cep CEP | --lat LAT --lon LON]',
   stock: 'stock <SKU> (--cep CEP | --lat LAT --lon LON) [--min-qty N | --quantity N]',
   stores: 'stores [--cep CEP | --lat LAT --lon LON]',
   snapshot: 'snapshot collect <query...> [--limit N] | read <run-id> [--offset N --limit N] | export <run-id> --format json|csv|xlsx',
 };
 const flags = {
-  plan:['cep','lat','lon','quantity','sku','brand','generic','brand-only','include-generics'],
-  search:['page','limit'], suggest:['limit'], product:[], gtin:[], info:['brazil'], compare:['brand-only','cep','lat','lon'],
+  plan:['cep','lat','lon','store','quantity','sku','brand','generic','brand-only','include-generics'],
+  search:['page','limit'], suggest:['limit'], product:[], gtin:[], info:['brazil'], compare:['brand-only','cep','lat','lon','store'],
   stock:['cep','lat','lon','min-qty','quantity'], stores:['cep','lat','lon'], snapshot:['limit','offset','format'],
 };
 const usageError = msg => { console.error(msg); process.exitCode = 1; };
@@ -51,7 +51,7 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
   try {
     const options = {json:{type:'boolean'}};
     for (const f of flags[command]) options[f] = {type:['brazil','brand-only'].includes(f)?'boolean':'string'};
-    if(command==='plan') for(const f of flags.plan.slice(3)) options[f]={type:'string',multiple:true};
+    if(command==='plan') for(const f of flags.plan.slice(4)) options[f]={type:'string',multiple:true};
     args = args.flatMap((x,i) => ['--lat','--lon'].includes(x) && /^-\d/.test(args[i+1]) ? [x+'='+args[i+1]] :
       /^-\d/.test(x) && ['--lat','--lon'].includes(args[i-1]) ? [] : [x]);
     ({values:v,positionals:words} = parseArgs({args,allowPositionals:true,options}));
@@ -59,6 +59,7 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     if (command === 'stock' || command === 'plan' || (command === 'stores' && (source.directoryScope==='near_origin' || v.cep || v.lat || v.lon))) origin=location(v);
     if (command === 'stores' && words.length) throw Error(usage.stores);
     if (command === 'compare' && [v.cep,v.lat,v.lon].some(x=>x!==undefined)) origin=location(v);
+    if (v.store !== undefined && (!origin || (v.store !== 'nearest' && (command === 'plan' || !/^\d+$/.test(v.store))))) throw Error(usage[command]);
     if (command === 'stock' && (words.length!==1 || !/^\d+$/.test(words[0]) || (v.quantity != null && v['min-qty'] != null))) throw Error(usage.stock);
     if (command === 'product' && !words.every(x=>/^\d+$/.test(x))) throw Error(usage.product);
     if (command === 'gtin' && (words.length!==1 || !validGtin(words[0]))) throw Error(usage.gtin);
@@ -84,7 +85,8 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
   }
   const query=words.join(' '), limit=Number(v.limit??20), columns=['sku','name','type','seller','currentPrice','inStock'];
   if (command==='plan') {
-    const result=await planShoppingList(bin,source,items,origin);
+    const result=await planShoppingList(bin,source,items,origin,v.store);
+    if(!v.json && result.fixedStore) printFixedStore(result.fixedStore);
     if(v.json) console.log(JSON.stringify(result,null,2));
     else if (result.pickupPlans?.plans.length) {
       const titles={both:'Menos lojas e menor preço estimado',fewest_stores:'Menos lojas',lowest_price:'Menor preço estimado'};
@@ -112,8 +114,8 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     else if(result.pendingBrands) console.log('Quer considerar genéricos para '+result.pendingBrands.join(', ')+'?');
     else {
       console.log(result.status);
-      for(const table of result.tables??[]) { console.log(table.query); emit(table.choices,false,['sku','name','type','currentPrice']); }
-      if(result.items) emit(result.items,false,['sku','name','requestedQuantity','localStatus','currentPrice']);
+      for(const table of result.tables??[]) { console.log(table.query); emit(table.choices,false,['name','type','currentPrice']); }
+      if(result.items) printQuotes(result.items);
       if(result.commonPickupPoints?.length) console.table(result.commonPickupPoints);
       if(result.estimatedProductTotalBRL!=null) console.log('Subtotal estimado (BRL)',result.estimatedProductTotalBRL);
     }
@@ -145,7 +147,8 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
   }
   if (command==='compare') {
     const place=typeof origin==='string' ? {zipcode:origin} : {coordinates:origin};
-    const result=await compareOffers({retailer:bin,query,includeGenerics:!v['brand-only'],...place},source);
+    const result=await compareOffers({retailer:bin,query,includeGenerics:!v['brand-only'],store:v.store,...place},source);
+    if(!v.json && result.fixedStore) printFixedStore(result.fixedStore);
     if(v.json) console.log(JSON.stringify(result,null,2));
     else {
       console.log(result.status);
@@ -206,10 +209,17 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
   if((!rows.length && command!=='search') || (command==='stock' && rows.length && rows.every(row=>row.localStatus==='unavailable'))) process.exitCode=3;
 }
 
+function printFixedStore({branch,status}) {
+  if (!branch) return console.log(status === 'directory_failed' ? 'Falha ao consultar o diretório de lojas.' : 'A filial não pôde ser identificada.');
+  console.log([branch.storeName,branch.address?.street,branch.address?.number].filter(Boolean).join(' · '));
+}
+
 function printQuotes(rows) {
   console.table(rows.map(row=>({
-    SKU:row.sku, Medicamento:row.name, Tipo:row.type??catalogType(row), Preço:row.currentPrice,
-    'Origem do preço':row.priceScope, Atendimento:row.localStatus,
+    Medicamento:row.name, Tipo:row.type??catalogType(row), Preço:row.currentPrice,
+    'Origem do preço':row.priceScope, Atendimento:row.pickupAtStore ? ({
+      offered:'Retirada oferecida nesta loja',not_offered:'Sem oferta de retirada nesta loja',
+      unconfirmed:'Retirada não confirmada',lookup_failed:'Falha na consulta'})[row.pickupAtStore] : row.localStatus,
     'Qtd. solicitada':row.requestedQuantity, 'Retirada ofertada':row.methods?.filter(m=>m.channel==='pickup-in-point').map(m=>m.branch||m.pickupPointId).join(', ')||'—',
   })));
 }

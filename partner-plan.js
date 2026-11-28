@@ -1,5 +1,5 @@
 import { crossRetailerPlans } from './pickup-plans.js';
-import { quoteLocalOptions } from './compare.js';
+import { fixedStoreSource, quoteLocalOptions } from './compare.js';
 import { resolveMedication } from 'drogasil-cli';
 import { retailerComparison, retailerBasket } from 'drogasil-cli/retailer-workflows';
 
@@ -30,7 +30,7 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
     let rows=selection.products ?? [];
     if (item.genericOnly) rows=rows.filter(p=>p.type==='Genérico');
     if (item.brand) rows=rows.filter(p=>matchesRequestedBrand(p,item.brand) || (item.includeGenerics && p.role==='generic' && p.type==='Genérico'));
-    if (items.length === 1 && (selection.scope === 'direct_requested_pack' || selection.scope === 'equivalents_in_reference_catalog' || selection.scope === 'verified_drop_presentation') && rows.length) {
+    if (items.length === 1 && ((source.fixedStore && !selection.candidates) || selection.scope === 'direct_requested_pack' || selection.scope === 'equivalents_in_reference_catalog' || selection.scope === 'verified_drop_presentation') && rows.length) {
       const result = await quoteLocalOptions({...selection, products:rows}, source, origin, item.quantity ?? 1);
       const available = result.products.some(p => p.localStatus === 'available');
       const status = result.status === 'source_failed' ? 'source_failed' : available ? 'fulfillable' :
@@ -70,8 +70,14 @@ export function quoteChosenOffers(retailer,source,lines,origin) {
   }))},source);
 }
 
-export async function planShoppingList(retailer,provider,items,origin) {
-  const source = shoppingSource(provider);
+export async function planShoppingList(retailer,provider,items,origin,store) {
+  let source = shoppingSource(provider);
+  if (store) source = fixedStoreSource(retailer, source, origin, store);
+  const result = await planWithSource(retailer,source,items,origin);
+  return store ? source.withStoreEvidence(result) : result;
+}
+
+async function planWithSource(retailer,source,items,origin) {
   const result = await quoteShoppingList(retailer,source,items,origin);
   if (items.length < 2 || result.pendingBrands) return result;
   const pickupPlans = await crossRetailerPlans([{...result,retailerId:retailer}],items,(_,indices,chosen) =>
