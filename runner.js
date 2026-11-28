@@ -96,11 +96,18 @@ export async function run(source, argv, bin) {
     else {
       console.log(result.status);
       for(const table of result.tables??[]) { console.log(table.query); emit(table.choices,false,['sku','name','type','currentPrice']); }
+      for (const row of result.pending??[]) console.log(row.label??row.sku, row.status);
+      if (result.partialQuote) {
+        console.log('Cotação parcial dos itens',result.partialQuote.labels.join(', '),result.partialQuote.status);
+        if(result.partialQuote.items) emit(result.partialQuote.items,false,['sku','name','requestedQuantity','localStatus','currentPrice']);
+        if(result.partialQuote.estimatedProductTotalBRL!=null) console.log('Subtotal apenas desses itens (BRL)',result.partialQuote.estimatedProductTotalBRL);
+      }
       if(result.items) emit(result.items,false,['sku','name','requestedQuantity','localStatus','currentPrice']);
       if(result.commonPickupPoints?.length) console.table(result.commonPickupPoints);
       if(result.estimatedProductTotalBRL!=null) console.log('Subtotal estimado (BRL)',result.estimatedProductTotalBRL);
     }
-    if(result.status!=='fulfillable') process.exitCode=result.pending?.some(p=>p.status==='source_failed')?2:3;
+    if(result.status!=='fulfillable') process.exitCode=result.status==='source_failed' || result.partialQuote?.status==='source_failed' ||
+      result.pending?.some(p=>['source_failed','catalog_lookup_failed'].includes(p.status)) ? 2 : 3;
     return;
   }
   if (command==='snapshot') {

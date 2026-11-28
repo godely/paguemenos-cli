@@ -1,7 +1,7 @@
 import { physicalShopping } from './branch-shopping.js';
 import { inventoryConfig } from './branch-inventory.js';
 import { resolveMedication } from 'drogasil-cli';
-import { retailerComparison, retailerBasket } from 'drogasil-cli/retailer-workflows';
+import { retailerComparison, retailerBasket, tableLabel } from 'drogasil-cli/retailer-workflows';
 
 export async function quoteShoppingList(retailer, source, items, origin, resolve = resolveMedication, options = {}) {
   const pendingBrands = [];
@@ -12,14 +12,13 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
   if (pendingBrands.length) return {retailerId:retailer,status:'needs_generic_preference',pendingBrands};
   const config=inventoryConfig(retailer);
   const physical=Boolean(options.store || options.expandSearch || config);
-  const lines = [], tables = [], selections = [];
+  const lines = [], tables = [], selections = [], pending = [], quotedLabels = [];
   for (const item of items) {
     let selection;
     try {
       selection = await retailerComparison({retailer, query:item.sku ?? item.query,
         includeGenerics:!item.sku && Boolean(item.includeGenerics || item.genericOnly)},source);
-    } catch (error) {
-      if (!physical) throw error;
+    } catch {
       selection = {status:'catalog_lookup_failed',products:[]};
     }
     let rows=selection.products ?? [];
@@ -29,13 +28,33 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
       rows=rows.filter(p=>p.brand?.trim().toLocaleLowerCase('pt-BR')===brand ||
         (p.name.toLocaleLowerCase('pt-BR')+' ').startsWith(brand+' ') || (item.includeGenerics && p.role==='generic'));
     }
-    selections.push({...selection,products:rows});
     const choices=new Set(rows.map(p=>p.sku));
-    tables.push({query:item.query,status:selection.status,choices:selection.candidates??rows});
-    if (choices.size===1) lines.push({sku:rows[0].sku,quantity:item.quantity});
+    const label = tableLabel(tables.length);
+    const listed = selection.candidates ?? rows;
+    const status = selection.products?.length && !listed.length ? 'preference_unavailable' : selection.status;
+    selections.push({...selection,status,products:rows});
+    tables.push({label,query:item.query,quantity:item.quantity ?? 1,status,choices:listed});
+    if (choices.size===1) {
+      lines.push({sku:rows[0].sku,quantity:item.quantity ?? 1});
+      quotedLabels.push(label);
+    } else {
+      pending.push({label,query:item.query,status:listed.length ? 'choose_product' : status});
+    }
   }
   if (physical) return physicalShopping(retailer,source,items,selections,origin,options,config);
-  if(lines.length!==items.length) return {retailerId:retailer,status:'choose_products',tables};
+  if (pending.length) {
+    const needsChoice = pending.some(row=>row.status==='choose_product');
+    let partialQuote;
+    if (lines.length) {
+      try { partialQuote = await retailerBasket({retailer,items:lines,zipcode:origin},source); }
+      catch { partialQuote = {status:'source_failed'}; }
+    }
+    const allFailed = pending.every(row=>row.status==='catalog_lookup_failed') && (!partialQuote || partialQuote.status==='source_failed');
+    const status = needsChoice ? 'choose_products' : allFailed ? 'source_failed' : partialQuote ? 'partial' : 'unfilled';
+    return {retailerId:retailer,status,tables,pending,estimatedProductTotalBRL:null,
+      ...(partialQuote && {partialQuote:{...partialQuote,labels:quotedLabels}}),
+      planningScope:'whole_basket_fulfillment',routeStatus:'branch_inventory_unverified'};
+  }
   return {...await retailerBasket({retailer,items:lines,zipcode:origin},source),tables,
     planningScope:'whole_basket_fulfillment',routeStatus:'branch_inventory_unverified'};
 }
