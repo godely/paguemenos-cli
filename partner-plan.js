@@ -1,0 +1,53 @@
+import { resolveMedication } from 'drogasil-cli';
+import { retailerComparison, retailerBasket } from 'drogasil-cli/retailer-workflows';
+
+export async function quoteShoppingList(retailer, source, items, origin, resolve = resolveMedication) {
+  const pendingBrands = [];
+  for (const item of items) {
+    if (item.sku || /^\d+$/.test(item.query) || item.includeGenerics !== undefined || item.genericOnly || item.brand) continue;
+    if ((await resolve(item.query)).kind === 'brand') pendingBrands.push(item.query);
+  }
+  if (pendingBrands.length) return {retailerId:retailer,status:'needs_generic_preference',pendingBrands};
+  const lines = [], tables = [];
+  for (const item of items) {
+    const selection = await retailerComparison({retailer,query:item.sku ?? item.query,
+      includeGenerics:!item.sku && Boolean(item.includeGenerics || item.genericOnly)},source);
+    let rows=selection.products ?? [];
+    if (item.genericOnly) rows=rows.filter(p=>p.type==='Genérico');
+    if (item.brand) rows=rows.filter(p=>p.brand?.trim().toLocaleLowerCase('pt-BR')===item.brand.trim().toLocaleLowerCase('pt-BR'));
+    const choices=new Set(rows.map(p=>p.sku));
+    tables.push({query:item.query,status:selection.status,choices:selection.candidates??rows});
+    if (choices.size===1) lines.push({sku:rows[0].sku,quantity:item.quantity});
+  }
+  if(lines.length!==items.length) return {retailerId:retailer,status:'choose_products',tables};
+  return {...await retailerBasket({retailer,items:lines,zipcode:origin},source),tables,
+    planningScope:'whole_basket_fulfillment',routeStatus:'branch_inventory_unverified'};
+}
+
+export function shoppingItems(words, flags) {
+  const items=words.map(query=>({query,quantity:1}));
+  for(const key of ['quantity','sku','brand','generic','brand-only','include-generics']) {
+    for(const selection of flags[key]??[]) {
+      const toggle=['generic','brand-only','include-generics'].includes(key);
+      const match=(toggle ? /^([A-Z]+)$/i : /^([A-Z]+)=(.+)$/i).exec(selection);
+      if(!match) throw new TypeError('Invalid item selection: '+selection);
+      const position=[...match[1].toUpperCase()].reduce((n,char)=>n*26+char.charCodeAt(0)-64,0)-1;
+      const item=items[position];
+      if(!item) throw new TypeError('Unknown item: '+match[1]);
+      if(key==='quantity') {
+        item.quantity=Number(match[2]);
+        if(!Number.isSafeInteger(item.quantity)||item.quantity<1) throw new TypeError('Invalid requested quantity');
+      } else if(key==='sku') {
+        if(!/^\d+$/.test(match[2])) throw new TypeError('Expected a retailer SKU');
+        item.sku=match[2];
+      } else if(key==='brand') item.brand=match[2];
+      else if(key==='generic') item.genericOnly=true;
+      else {
+        if(item.includeGenerics!==undefined) throw new TypeError('Conflicting generic preferences');
+        item.includeGenerics=key==='include-generics';
+      }
+      if(item.genericOnly && (item.brand || item.includeGenerics===false)) throw new TypeError('Conflicting brand and generic choices');
+    }
+  }
+  return items;
+}

@@ -21,3 +21,14 @@ test('Pague Menos locator excludes other banners and preserves unknown coordinat
   assert.deepEqual(rows.map(s=>s.id),['1']); assert.equal(rows[0].address.latitude,null);
   await assert.rejects(stores(undefined),/valid CEP/);
 });
+test('one partner basket checks every selected line together after brand consent', async ()=>{
+  const {quoteShoppingList,shoppingItems}=await import('./partner-plan.js');
+  const asks=await quoteShoppingList('partner',{},[{query:'Example'}],'01001000',async()=>({kind:'brand'}));
+  assert.deepEqual(asks.pendingBrands,['Example']);
+  let count=0;
+  const source={product:async sku=>[{sku,sellerId:'1',name:'Example '+sku}],
+    basket:async lines=>{count++;return lines.map(({offer,quantity})=>({...offer,requestedQuantity:quantity,localStatus:'available',currentPrice:2,methods:[]}));}};
+  const result=await quoteShoppingList('partner',source,shoppingItems(['1','2'],{quantity:['A=3']}),'01001000');
+  assert.equal(count,1);assert.equal(result.estimatedProductTotalBRL,8);assert.equal(result.status,'fulfillable');
+  assert.throws(()=>shoppingItems(['abc'],{generic:['A'],'brand-only':['A']}));
+});
