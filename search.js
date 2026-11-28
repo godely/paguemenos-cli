@@ -1,3 +1,5 @@
+import { medicationIntent, verifiedRow } from 'drogasil-cli/medication-catalog';
+
 const fold = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 const connectors = new Set(['a', 'de', 'da', 'do', 'em', 'com', 'e']);
 const isDose = word => /^\d+(?:\.\d+)?(?:mg|mcg|ui|g|%)(?:\/|$)/.test(word);
@@ -121,4 +123,19 @@ export async function suggest(site, prefix, limit = 7, request = fetch) {
     Number(b.bare) - Number(a.bare) || b.count - a.count ||
     (supported.get(b.name) ?? 0) - (supported.get(a.name) ?? 0));
   return ranked.slice(0, limit).map(option => option.term);
+}
+
+export async function searchVerifiedCatalog(source, query, page, limit, intentFor = medicationIntent) {
+  const [rows, intent] = await Promise.all([source.search(query, page, limit), intentFor(query)]);
+  if (intent.kind !== 'ingredient') return rows;
+  return rows.flatMap(row => {
+    const field = 'NomeSubstanciaPrincipioAtivo';
+    // The retailer sometimes fills this field with the class “Antimicrobiano”
+    // alone or before the actual ingredient. Keep other field values authoritative.
+    const ingredients = [row.facts?.[field]].flat().filter(value => typeof value === 'string')
+      .flatMap(value => value.split(/[,;]/)).map(value => value.trim())
+      .filter(value => value && !/^antimicrobianos?$/iu.test(value));
+    const verified = verifiedRow(row, intent, {ingredients, evidence:{source:'retailer_field', field}});
+    return verified ? [verified] : [];
+  });
 }

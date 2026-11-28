@@ -1,7 +1,9 @@
-import { quoteShoppingList, shoppingItems } from './partner-plan.js';
-import { inventoryConfig, lookupBranchStock } from './branch-inventory.js';
+import {hasPickupOffer} from './branch-shopping.js';
+import { confirmCliNames } from 'drogasil-cli/cli-name-confirmation';
+import { planShoppingList, shoppingItems } from './partner-plan.js';
 import { parseArgs } from 'node:util';
-import { catalogInfo, catalogSnapshot, catalogType, runSnapshotCommand, renderPurchase, purchaseExitCode, acceptExpansion } from 'drogasil-cli/retailer-workflows';
+import { renderPurchase, purchaseExitCode, acceptExpansion, retailerComparison, catalogInfo, catalogSnapshot, catalogType, requestsDrops, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
+import { inventoryConfig, lookupBranchStock } from './branch-inventory.js';
 import { compareOffers } from './compare.js';
 import { checkoutOrigin, point } from './location.js';
 import { validGtin } from './vtex.js';
@@ -11,7 +13,7 @@ const usage = {
   search: 'search <text> [--page N --limit N]', suggest: 'suggest <prefix> [--limit N]',
   product: 'product <SKU> [<SKU> ...]', gtin: 'gtin <EAN>',
   info: 'info <name or SKU> [<name or SKU> ...] [--brazil]',
-  compare: 'compare <name or SKU> [--brand-only] [--cep CEP | --lat LAT --lon LON] [--store nearest | --expand]',
+  compare: 'compare <name or SKU> [--brand-only] [--cep CEP | --lat LAT --lon LON] [--store nearest|ID | --expand]',
   stock: 'stock <SKU> (--cep CEP | --lat LAT --lon LON) [--min-qty N | --quantity N | --all] [--max-branches N] [--expand]',
   stores: 'stores [--cep CEP | --lat LAT --lon LON]',
   snapshot: 'snapshot collect <query...> [--limit N] | read <run-id> [--offset N --limit N] | export <run-id> --format json|csv|xlsx',
@@ -21,7 +23,11 @@ const flags = {
   search:['page','limit'], suggest:['limit'], product:[], gtin:[], info:['brazil'], compare:['brand-only','cep','lat','lon','store','expand'],
   stock:['cep','lat','lon','min-qty','quantity','all','max-branches','expand'], stores:['cep','lat','lon'], snapshot:['limit','offset','format'],
 };
-const usageError = msg => { console.error(msg); process.exitCode = 1; };
+function usageError(msg, json = false) {
+  if (json) console.log(JSON.stringify({error:msg}));
+  else console.error(msg);
+  process.exitCode = 1;
+}
 function emit(rows, json, columns) {
   if (json) console.log(JSON.stringify(rows, null, 2));
   else console.table(rows.map(row => Object.fromEntries(columns.map(k => [k,row?.[k] ?? '—']))));
@@ -37,7 +43,7 @@ function location(v) {
   checkoutOrigin(v.cep);
   return v.cep;
 }
-export async function run(source, argv, bin) {
+export async function run(source, argv, bin, {choicesFor} = {}) {
   let [command, ...args] = argv;
   if (!command || ['-h','--help','help'].includes(command)) {
     const help = Object.values(usage).map(s => '  '+bin+' '+s+' [--json]').join('\n');
@@ -45,7 +51,7 @@ export async function run(source, argv, bin) {
     console.log(help);
     return;
   }
-  if (!Object.hasOwn(usage,command)) return usageError('Unknown command: '+command);
+  if (!Object.hasOwn(usage,command)) return usageError('Unknown command: '+command,args.includes('--json'));
   if (args.includes('--help') || args.includes('-h')) { console.log('Usage: '+bin+' '+usage[command]+' [--json]'); return; }
   let v, words, origin, items;
   try {
@@ -59,10 +65,9 @@ export async function run(source, argv, bin) {
     if (command === 'stock' || command === 'plan' || (command === 'stores' && (source.directoryScope==='near_origin' || v.cep || v.lat || v.lon))) origin=location(v);
     if (command === 'stores' && words.length) throw Error(usage.stores);
     if (command === 'compare' && [v.cep,v.lat,v.lon].some(x=>x!==undefined)) origin=location(v);
-    if (['plan','compare'].includes(command)) {
-      if (v.store != null && (v.store !== 'nearest' || !origin)) throw Error('--store nearest requires an origin');
-      if (v.expand && (!origin || v.store)) throw Error('--expand requires an origin and a search across stores');
-    }
+    if (v.store != null && (!origin || (v.store !== 'nearest' && (command !== 'compare' || !/^\d+$/.test(v.store)))))
+      throw Error('--store nearest or an explicit comparison branch requires an origin');
+    if (v.expand && (!origin || v.store)) throw Error('--expand requires an origin and a search across stores');
     if (command === 'stock' && (words.length!==1 || !/^\d+$/.test(words[0]) || (v.quantity != null && v['min-qty'] != null))) throw Error(usage.stock);
     if (command === 'stock') {
       if (v.all && (v.quantity != null || v['min-qty'] != null)) throw Error('--all cannot be combined with a minimum quantity');
@@ -74,33 +79,72 @@ export async function run(source, argv, bin) {
     if (!positive(v.page??1) || !positive(v.limit??1, ['search','snapshot'].includes(command)?1000:50) || (command==='stock' && !positive(v.quantity??v['min-qty']??1))) throw Error('Invalid page, limit or quantity');
     if (command==='plan') items=shoppingItems(words,v);
     if (command==='snapshot' && (!['collect','read','export'].includes(words[0]) || words.length<2 || !Number.isSafeInteger(Number(v.offset??0)) || Number(v.offset??0)<0)) throw Error(usage.snapshot);
-  } catch(error) { return usageError(error.message); }
+  } catch(error) { return usageError(error.message, args.includes('--json')); }
+  if (['search','compare','info','plan'].includes(command)) {
+    const queries = command === 'plan' ? items.map(item => item.sku ?? item.query) :
+      command === 'info' ? words : [words.join(' ')];
+    const {names, pending} = await confirmCliNames(queries, {json:v.json, choicesFor, suggest:source.suggest?.bind(source), write:text => console.error(text)});
+    if (pending) {
+      if (v.json) {
+        const result = command === 'search' ? [] : command === 'plan' ? {...pending, items, tables:[], plans:[]} :
+          command === 'info' ? {...pending, results:[]} : {...pending, products:[]};
+        console.log(JSON.stringify(result, null, 2));
+      }
+      process.exitCode=3;
+      return;
+    }
+    if (command === 'plan') items = items.map((item, i) => item.sku ? item : {...item, query:names[i]});
+    else words = names;
+  }
   const query=words.join(' '), limit=Number(v.limit??20), columns=['sku','name','type','seller','currentPrice','inStock'];
   if (command==='plan') {
-    const options={store:v.store,expandSearch:v.expand};
-    let result=await quoteShoppingList(bin,source,items,origin,undefined,options);
+    let result=await planShoppingList(bin,source,items,origin,v.store,v.expand);
     if (result.coverage) {
       if (v.json) console.log(JSON.stringify(result,null,2));
       else {
         printPurchase(result);
         if (await acceptExpansion(result.coverage,true)) {
-          result=await quoteShoppingList(bin,source,items,origin,undefined,{expandSearch:true});
+          result=await planShoppingList(bin,source,items,origin,undefined,true);
           printPurchase(result);
         }
       }
       process.exitCode=purchaseExitCode(result);
       return;
     }
+    if(!v.json && result.fixedStore) printFixedStore(result.fixedStore);
     if(v.json) console.log(JSON.stringify(result,null,2));
+    else if (result.pickupPlans?.plans.length) {
+      const titles={both:'Menos lojas e menor preço estimado',fewest_stores:'Menos lojas',lowest_price:'Menor preço estimado'};
+      const money=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'});
+      for (const plan of result.pickupPlans.plans) {
+        const total=plan.totalBRL == null ? 'total a confirmar' : money.format(plan.totalBRL);
+        const distance=plan.roundTripKm == null ? 'distância a confirmar' : plan.roundTripKm.toFixed(2)+' km de ida e volta em linha reta';
+        console.log(titles[plan.objective]+' · '+total+' · '+distance);
+        for (const [i,stop] of plan.stops.entries()) {
+          const address=[stop.address?.street,stop.address?.number].filter(Boolean).join(', ');
+          console.log((i+1)+'. '+[stop.name,address].filter(Boolean).join(' — '));
+          for (const p of stop.pickups) console.log('   '+p.packs+' × '+p.name);
+        }
+      }
+      const difference=result.pickupPlans.comparison;
+      if (difference) console.log('Economia estimada de '+money.format(difference.savingsBRL)+' com '+difference.extraStops+' parada(s) a mais.');
+      console.log('Retirada confirmada para a quantidade pedida. Frete e taxas à parte.');
+      if (result.pickupPlans.searchLimited || result.pickupPlans.lookupFailures.length) console.log('Comparação parcial entre as opções verificadas.');
+    }
+    else if (result.planningScope === 'one_pack_alternatives') {
+      if (result.lowestPricedPickup) console.log('Menor preço com retirada confirmada:', result.lowestPricedPickup.name,
+        '—', result.lowestPricedPickup.currentPrice.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}));
+      printQuotes(result.products);
+    }
     else if(result.pendingBrands) console.log('Quer considerar genéricos para '+result.pendingBrands.join(', ')+'?');
     else {
       console.log(result.status);
-      for(const table of result.tables??[]) { console.log(table.query); emit(table.choices,false,['sku','name','type','currentPrice']); }
-      if(result.items) emit(result.items,false,['sku','name','requestedQuantity','localStatus','currentPrice']);
+      for(const table of result.tables??[]) { console.log(table.query); emit(table.choices,false,['name','type','currentPrice']); }
+      if(result.items) printQuotes(result.items);
       if(result.commonPickupPoints?.length) console.table(result.commonPickupPoints);
       if(result.estimatedProductTotalBRL!=null) console.log('Subtotal estimado (BRL)',result.estimatedProductTotalBRL);
     }
-    if(result.status!=='fulfillable') process.exitCode=result.pending?.some(p=>p.status==='source_failed')?2:3;
+    if(result.status!=='fulfillable' && result.pickupPlans?.status!=='complete') process.exitCode=result.status==='source_failed' || result.pending?.some(p=>p.status==='source_failed')?2:3;
     return;
   }
   if (command==='snapshot') {
@@ -109,8 +153,8 @@ export async function run(source, argv, bin) {
   }
   if (command==='info') {
     // Preserve the original SKU-only response for existing callers.
-    if (words.length===1 && /^\d+$/.test(words[0]) && !v.brazil) {
-      const rows=await source.product(words[0]);
+    if (v.json && words.length===1 && /^\d+$/.test(words[0]) && !v.brazil) {
+      const rows=await source.facts(words[0]);
       console.log(JSON.stringify(rows,null,2));
       if(!rows.length) process.exitCode=3;
       return;
@@ -119,10 +163,10 @@ export async function run(source, argv, bin) {
     if (v.json) console.log(JSON.stringify(data,null,2));
     else for (const result of data.results) {
       console.log(result.query, result.status);
-      console.table(result.products.map(p=>({name:p.name, strengths:p.strengths.join(', '),forms:p.forms.join(', '),prescription:p.prescriptionLabel.join(', ')||'não confirmado',retention:p.retentionLabel.join(', ')||'não confirmado',source:p.source})));
+      console.table(result.products.map(p=>({name:p.name, strengths:p.strengths.join(', '),forms:p.forms.join(', '),prescription:p.prescriptionLabel.join(', ')||'não confirmado',retention:p.prescription.retained === null ? (p.retentionLabel.join(', ')||'não confirmado') : p.prescription.retained ? 'Sim' : 'Não',receituário:p.prescription.form||'não confirmado',norma:p.prescription.rule,source:p.source})));
       if(v.brazil) console.log(JSON.stringify(result.brazil??{status:'não confirmado'},null,2));
     }
-    if(data.results.some(r=>r.status==='source_failed'||r.nationalStatus==='source_failed')) process.exitCode=2;
+    if(data.results.some(r=>['source_failed','partial'].includes(r.status)||r.nationalStatus==='source_failed')) process.exitCode=2;
     else if(data.results.some(r=>r.status!=='matches' && !r.brazil?.presentations?.length)) process.exitCode=3;
     return;
   }
@@ -130,7 +174,9 @@ export async function run(source, argv, bin) {
     const place=typeof origin==='string' ? {zipcode:origin} : {coordinates:origin};
     const args={retailer:bin,query,includeGenerics:!v['brand-only'],...place,store:v.store,expandSearch:v.expand};
     let result=await compareOffers(args,source);
-    if (result.purchase) {
+    const inventory = result.purchase;
+    if (inventory && (inventory.stockEvidence === 'retailer_branch_snapshot' || v.expand) &&
+        (inventory.status === 'complete' || !hasPickupOffer(result))) {
       if (v.json) console.log(JSON.stringify(result,null,2));
       else {
         printPurchase(result.purchase);
@@ -142,6 +188,7 @@ export async function run(source, argv, bin) {
       process.exitCode=purchaseExitCode(result.purchase);
       return;
     }
+    if(!v.json && result.fixedStore) printFixedStore(result.fixedStore);
     if(v.json) console.log(JSON.stringify(result,null,2));
     else {
       console.log(result.status);
@@ -177,7 +224,13 @@ export async function run(source, argv, bin) {
   }
   let rows;
   if(command==='search') {
-    rows=await source.search(query,Number(v.page??1),limit);
+    const page = Number(v.page ?? 1);
+    if (source.byGtin && query.trim().includes(' ') && requestsDrops(query)) {
+      const result = await retailerComparison({retailer:bin, query, includeGenerics:false}, source);
+      rows = (result.candidates ?? result.products ?? []).slice((page - 1) * limit, page * limit);
+    } else {
+      rows = await (source.searchCatalog ?? source.search).call(source, query, page, limit);
+    }
     if (!rows.length && Number(v.page??1)===1) {
       try { const terms=(await source.suggest?.(query)??[]).filter(s=>s.toLowerCase()!==query.toLowerCase()); if(terms.length) console.error('Você quis dizer '+terms[0]+'?'); }
       catch(error) { console.error('Sugestões indisponíveis. '+error.message); }
@@ -223,10 +276,17 @@ export async function run(source, argv, bin) {
   }
 }
 
+function printFixedStore({branch,status}) {
+  if (!branch) return console.log(status === 'directory_failed' ? 'Falha ao consultar o diretório de lojas.' : 'A filial não pôde ser identificada.');
+  console.log([branch.storeName,branch.address?.street,branch.address?.number].filter(Boolean).join(' · '));
+}
+
 function printQuotes(rows) {
   console.table(rows.map(row=>({
-    SKU:row.sku, Medicamento:row.name, Tipo:row.type??catalogType(row), Preço:row.currentPrice,
-    'Origem do preço':row.priceScope, Atendimento:row.localStatus,
+    Medicamento:row.name, Tipo:row.type??catalogType(row), Preço:row.currentPrice,
+    'Origem do preço':row.priceScope, Atendimento:row.pickupAtStore ? ({
+      offered:'Retirada oferecida nesta loja',not_offered:'Sem oferta de retirada nesta loja',
+      unconfirmed:'Retirada não confirmada',lookup_failed:'Falha na consulta'})[row.pickupAtStore] : row.localStatus,
     'Qtd. solicitada':row.requestedQuantity, 'Retirada ofertada':row.methods?.filter(m=>m.channel==='pickup-in-point').map(m=>m.branch||m.pickupPointId).join(', ')||'—',
   })));
 }

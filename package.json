@@ -15,12 +15,13 @@
     "./runner": "./runner.js",
     "./compare": "./compare.js",
     "./plan": "./partner-plan.js",
+    "./pickup-plans": "./pickup-plans.js",
     "./branch-inventory": "./branch-inventory.js"
   },
   "scripts": {
     "test": "node --test"
   },
   "dependencies": {
-    "drogasil-cli": "https://codeload.github.com/godely/drogasil-cli/tar.gz/f89e5814391b69ca72d519b28b2bced6a1c58082"
+    "drogasil-cli": "https://codeload.github.com/godely/drogasil-cli/tar.gz/954bfdb2a3dad359ab485da65a11abc2d979c933"
   }
 }

@@ -48,8 +48,20 @@ function expandSummary(stocks, minimums, checked, partial) {
     advice:'Ligue para a filial antes de sair para confirmar o estoque.'};
 }
 
-export async function physicalShopping(retailer, source, items, selections, origin, {store, expandSearch=false}={}, config) {
-  if ((store != null && store !== 'nearest') || (store && expandSearch) || !origin) throw new TypeError('Invalid physical shopping scope');
+export function hasPickupOffer(quote) {
+  const rows = quote.products ?? quote.items ?? [];
+  return rows.some(row => row.localStatus === 'available' &&
+    row.methods?.some(method => method.channel === 'pickup-in-point' && method.pickupPointId));
+}
+
+export function permitsStockExpansion(quote) {
+  const rows = quote.products ?? quote.items ?? [];
+  return !['source_failed','partial','lookup_failed','unverified','unconfirmed'].includes(quote.status) &&
+    !rows.some(row => row.localStatus === 'lookup_failed') && !hasPickupOffer(quote);
+}
+
+export async function physicalShopping(retailer, source, items, selections, origin, {store, expandSearch=false, includeBranchChoices=false, allowExpansion=true}={}, config) {
+  if ((store != null && store !== 'nearest' && !/^\d+$/.test(store)) || (store && expandSearch) || !origin) throw new TypeError('Invalid physical shopping scope');
   const prepared=prepare(retailer,items,selections);
   const minimums=new Map();
   for (const {table,products} of prepared) for (const {sku} of products) {
@@ -69,7 +81,8 @@ export async function physicalShopping(retailer, source, items, selections, orig
     seen.add(branch.id);
     unique.push(branch);
   }
-  const initial=store ? (distanceUnknown ? [] : unique.slice(0,1)) : unique.slice(0,30);
+  const initial = store === 'nearest' ? (distanceUnknown ? [] : unique.slice(0,1))
+    : store ? unique.filter(branch => String(branch.id) === store) : unique.slice(0,30);
   const wider=expandSearch ? unique.filter(s=>s.distanceKm<=25) : [];
   const branchIds=[...new Set([...initial,...wider].map(s=>s.id))];
   let feed, feedFailed=false;
@@ -88,7 +101,7 @@ export async function physicalShopping(retailer, source, items, selections, orig
   gather(initial);
   const allZero=initial.length>0 && !distanceUnknown && prepared.every(p=>p.products.length && !['partial','ambiguous','catalog_lookup_failed'].includes(p.table.status)) &&
     [...stocks.values()].every(s=>s.stores.every(b=>b.quantity===0));
-  const canExpand=!store && allZero && initial.at(-1).distanceKm<25 && unique.slice(30).some(s=>s.distanceKm<=25);
+  const canExpand=allowExpansion && !store && allZero && initial.at(-1).distanceKm<25 && unique.slice(30).some(s=>s.distanceKm<=25);
   const expanded=Boolean(expandSearch && canExpand);
   if (expanded) gather(wider);
   const incomplete=directoryFailed || feedFailed || distanceUnknown || !feed ||
@@ -97,7 +110,7 @@ export async function physicalShopping(retailer, source, items, selections, orig
     allZero,canExpand:canExpand && !expanded,stockUnknown:incomplete};
   const coordinatesFor=async()=>new Map(unique.filter(s=>Number.isFinite(s.address?.latitude) && Number.isFinite(s.address?.longitude))
     .map(s=>[s.id,s.address]));
-  const plan=await planFromInventory(prepared,stocks,{store,nearestStore:initial[0],coverage,coordinatesFor,
+  const plan=await planFromInventory(prepared,stocks,{store:store ? 'nearest' : undefined,nearestStore:initial[0],coverage,coordinatesFor,includeBranchChoices,
     expandedSearch:expanded ? expandSummary(stocks,minimums,wider.length,incomplete) : undefined});
   return {...plan,retailerId:retailer,stockEvidence:feed?'retailer_branch_snapshot':feedFailed?'branch_inventory_lookup_failed':'no_branch_inventory_source',
     snapshotAt:feed?.snapshotAt ?? null,priceEvidence:'retailer_online_reference',

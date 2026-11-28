@@ -1,6 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRetailer, validGtin } from './vtex.js';
+test('keeps the source page, category and online signal attached to each seller', async () => {
+  const product = { categories: ['/Saúde/Higiene/', '/Saúde/'], items: [{itemId:'12', sellers:[
+    {sellerId:'a', sellerDefault:false, commertialOffer:{IsAvailable:true, AvailableQuantity:10000}},
+    {sellerId:'b', sellerDefault:true, commertialOffer:{IsAvailable:false, AvailableQuantity:0}},
+    {sellerId:'c', commertialOffer:{}},
+  ]}] };
+  const urls = [];
+  const source = createRetailer({name:'Example', site:'https://example.org'}, async url => {
+    urls.push(url.href);
+    return Response.json([product]);
+  });
+  for (const rows of [await source.search('higiene', 2, 4), await source.product('12')]) {
+    assert.deepEqual(rows.map(r => [r.isDefaultSeller, r.onlineStockSignal]), [[false,10000], [true,0], [null,null]]);
+    assert.ok(rows.every(r => r.sourceUrl === urls[0] && r.observedAt === rows[0].observedAt));
+    assert.deepEqual(rows[0].categoryPaths, product.categories);
+    urls.shift();
+  }
+});
+
 test('large user pages span bounded source pages and preserve all sellers for each product', async () => {
   const windows=[];
   const source=createRetailer({name:'Example',site:'https://example.com'},async url=>{
@@ -74,4 +93,20 @@ test('a single fulfillment simulation aggregates repeat SKUs and uses only match
   assert.deepEqual(got[0].methods,[]);
   assert.equal(got[1].currentPrice,5.05);
   assert.equal(got[1].methods[0].pickupPointId,'B');
+});
+
+test('catalog facts work without sellers, quotes or location', async () => {
+  const item = {itemId:'12', name:'Marca solução 60 mL', ean:'7899547543766'};
+  const calls = [];
+  const retailer = createRetailer({name:'Example',site:'https://example.test'}, async url => {
+    assert.equal(url.pathname,'/api/catalog_system/pub/products/search');
+    calls.push(url.searchParams.get('fq') ?? url.searchParams.get('ft'));
+    return Response.json([{items:[item],allSpecifications:['Apresentação'],Apresentação:['Em solução']}]);
+  });
+  for (const rows of [await retailer.facts('Marca'),await retailer.facts('12'),await retailer.factsByGtin(item.ean)]) {
+    assert.deepEqual(rows.map(row => row.sku),['12']);
+    assert.deepEqual(rows[0].facts.Apresentação,['Em solução']);
+    for(const field of ['currentPrice','listPrice','inStock','onlineStockSignal','sellerId']) assert.ok(!(field in rows[0]));
+  }
+  assert.deepEqual(calls,['Marca','skuId:12','alternateIds_Ean:' + item.ean]);
 });

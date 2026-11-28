@@ -31,11 +31,12 @@ export async function stores(origin, request = fetch) {
     const distanceKm = number(row.distancia_usuario, 0, Infinity);
     const prior = branches.get(id);
     if (prior && (prior.distanceKm ?? Infinity) <= (distanceKm ?? Infinity)) continue;
+    const hours = { weekdays: row.seg_a_sex || null, saturday: row.sabado || null,
+      sunday: row.domingo || null, holidays: row.feriado || null };
     branches.set(id, {
       id, storeName: row.nome_loja, distanceKm, status: status || null,
       phone: phone(row.ddd, row.fixo_loja) ?? phone(row.ddd, row.celular_loja),
-      hours: { weekdays: row.seg_a_sex || null, saturday: row.sabado || null,
-        sunday: row.domingo || null, holidays: row.feriado || null },
+      hours, openingHours: hours,
       address: {street: row.endereco, district: row.bairro, city: row.cidade, state: row.uf, postalCode: row.cep,
         latitude: number(row.latitude_loja,-90,90), longitude: number(row.longitude,-180,180)},
     });
