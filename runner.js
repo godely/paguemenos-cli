@@ -21,7 +21,11 @@ const flags = {
   search:['page','limit'], suggest:['limit'], product:[], gtin:[], info:['brazil'], compare:['brand-only','cep','lat','lon','store','expand'],
   stock:['cep','lat','lon','min-qty','quantity','all','max-branches','expand'], stores:['cep','lat','lon'], snapshot:['limit','offset','format'],
 };
-const usageError = msg => { console.error(msg); process.exitCode = 1; };
+function usageError(message, json = false) {
+  if (json) console.log(JSON.stringify({ error: message }));
+  else console.error(message);
+  process.exitCode = 1;
+}
 function emit(rows, json, columns) {
   if (json) console.log(JSON.stringify(rows, null, 2));
   else console.table(rows.map(row => Object.fromEntries(columns.map(k => [k,row?.[k] ?? '—']))));
@@ -45,7 +49,9 @@ export async function run(source, argv, bin) {
     console.log(help);
     return;
   }
-  if (!Object.hasOwn(usage,command)) return usageError('Unknown command: '+command);
+  const endOfOptions = args.indexOf('--');
+  const jsonRequested = args.slice(0, endOfOptions === -1 ? args.length : endOfOptions).includes('--json');
+  if (!Object.hasOwn(usage,command)) return usageError('Unknown command: '+command, jsonRequested);
   if (args.includes('--help') || args.includes('-h')) { console.log('Usage: '+bin+' '+usage[command]+' [--json]'); return; }
   let v, words, origin, items;
   try {
@@ -74,7 +80,7 @@ export async function run(source, argv, bin) {
     if (!positive(v.page??1) || !positive(v.limit??1, ['search','snapshot'].includes(command)?1000:50) || (command==='stock' && !positive(v.quantity??v['min-qty']??1))) throw Error('Invalid page, limit or quantity');
     if (command==='plan') items=shoppingItems(words,v);
     if (command==='snapshot' && (!['collect','read','export'].includes(words[0]) || words.length<2 || !Number.isSafeInteger(Number(v.offset??0)) || Number(v.offset??0)<0)) throw Error(usage.snapshot);
-  } catch(error) { return usageError(error.message); }
+  } catch(error) { return usageError(error.message, v?.json ?? jsonRequested); }
   const query=words.join(' '), limit=Number(v.limit??20), columns=['sku','name','type','seller','currentPrice','inStock'];
   if (command==='plan') {
     const options={store:v.store,expandSearch:v.expand};
