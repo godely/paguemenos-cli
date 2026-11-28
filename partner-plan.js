@@ -1,3 +1,4 @@
+import { quoteLocalOptions } from './compare.js';
 import { physicalShopping } from './branch-shopping.js';
 import { inventoryConfig } from './branch-inventory.js';
 import { resolveMedication } from 'drogasil-cli';
@@ -30,6 +31,14 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
         (p.name.toLocaleLowerCase('pt-BR')+' ').startsWith(brand+' ') || (item.includeGenerics && p.role==='generic'));
     }
     selections.push({...selection,products:rows});
+    if (items.length === 1 && !physical && selection.scope === 'direct_requested_pack' && rows.length) {
+      const result = await quoteLocalOptions({...selection, products:rows}, source, origin, item.quantity ?? 1);
+      const available = result.products.some(p => p.localStatus === 'available');
+      const status = result.status === 'source_failed' ? 'source_failed' : available ? 'fulfillable' :
+        (result.status === 'partial' || result.unverified.length || result.products.some(p => p.localStatus !== 'unavailable')) ? 'unverified' : 'unavailable';
+      return { ...result, status, quoteStatus:result.status, planningScope:'one_pack_alternatives',
+        tables:[{query:item.query, status, choices:result.products}], routeStatus:'branch_inventory_unverified' };
+    }
     const choices=new Set(rows.map(p=>p.sku));
     tables.push({query:item.query,status:selection.status,choices:selection.candidates??rows});
     if (choices.size===1) lines.push({sku:rows[0].sku,quantity:item.quantity});
