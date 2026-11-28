@@ -10,6 +10,7 @@ const words = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu,''
 
 export function matchesRequestedBrand(product,requested) {
   const brand = words(product.brand), family = words(requested);
+  if (family && product.type === 'Genérico' && words(product.manufacturer) === family) return true;
   const trade = words(product.requestedTradeName);
   if (trade && product.role === 'requested') {
     if (trade === family) return true;
