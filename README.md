@@ -29,4 +29,6 @@ Use `info "name" "another name" --json` for retailer facts or add `--brazil` for
 
 `plan "item A" "item B" --cep CEP` checks the whole selected basket together. Use `--sku A=SKU`, `--quantity A=2`, or per-item brand and generic choices. Ambiguous options are returned for selection before checkout simulation. Product totals exclude fees. Common pickup points must cover all items. This workflow reports fulfillment evidence; route optimization is still tracked separately.
 
+Use `--store nearest` com `compare` ou `plan` e uma localização para consultar a filial mais próxima entre as lojas com distância conhecida. A filial é escolhida no diretório antes de conferir a retirada. O resultado informa se o site ofereceu a quantidade pedida nessa filial. A quantidade total na prateleira continua desconhecida.
+
 The multi-item `plan` command shows the fewest pickup stops and the lowest estimated product total among verified itineraries. Each named stop has a checkout quote for the requested packs. A shared stop requires a joint quote for all its items. The output marks a limited comparison, an unknown price or distance, and keeps the branch inventory count unknown. Both standalone partner CLIs use this planner.
