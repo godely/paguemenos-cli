@@ -79,7 +79,7 @@ test('matches whole identity tokens and explicit strengths, resisting mention-on
   assert.equal(match('morfina 10 mg', 'Dimorf', 'Morfina', '10MG'), true);
 });
 
-test('CLI offers completions on an empty first page without searching the suggestion or changing JSON rows', async t => {
+test('CLI asks before any product search and preserves JSON rows on every page', async t => {
   const printed = t.mock.method(console, 'log', () => {});
   const hints = t.mock.method(console, 'error', () => {});
   const originalCode = process.exitCode;
@@ -87,13 +87,14 @@ test('CLI offers completions on an empty first page without searching the sugges
   const queries = [];
   const retailer = { search: async text => { queries.push(text); return []; },
     suggest: t.mock.fn(async () => ['morfina', 'morfina 10mg']) };
-  await run(retailer, ['search', 'morfi', '--json'], 'paguemenos');
-  assert.deepEqual(queries, ['morfi']);
+  const names = {choicesFor:async () => ['morfina']};
+  await run(retailer, ['search', 'morfi', '--json'], 'paguemenos', names);
+  assert.deepEqual(queries, []);
   assert.equal(printed.mock.calls[0].arguments[0], '[]');
   assert.equal(hints.mock.calls[0].arguments[0], 'Você quis dizer morfina?');
-  assert.equal(process.exitCode ?? 0, 0);
-  await run(retailer, ['search', 'morfi', '--page', '2', '--json'], 'paguemenos');
-  assert.equal(retailer.suggest.mock.callCount(), 1);
+  assert.equal(process.exitCode, 3);
+  await run(retailer, ['search', 'morfi', '--page', '2', '--json'], 'paguemenos', names);
+  assert.equal(retailer.suggest.mock.callCount(), 0);
   await run(retailer, ['suggest', 'morfi', '--json'], 'paguemenos');
   assert.deepEqual(JSON.parse(printed.mock.calls.at(-1).arguments[0]), ['morfina', 'morfina 10mg']);
 });
@@ -113,4 +114,18 @@ test('a cosmetic kit cannot outrank a medication spelling suggested by the store
     ? {products:[{productName:'Rotina de skincare', categories:['/Dermo e Beleza/']}]}
     : {searches:[{term:'morfina', count:167}]});
   assert.deepEqual(await suggest(site,'mrofina',7,request), ['morfina']);
+});
+
+test('standalone catalog checks Pague Menos ingredient evidence before exposing a result', async () => {
+  const {searchVerifiedCatalog} = await import('./search.js');
+  const row = (name, active) => ({name, facts:{NomeSubstanciaPrincipioAtivo:active}});
+  const source = {search:async () => [
+    row('Prednisona 20mg',['Antimicrobiano']), row('Prednisona 5mg',['Prednisolona']),
+    row('Outro produto',['Antimicrobiano; Prednisona']), row('Prednisolona',[]),
+  ]};
+  const result = await searchVerifiedCatalog(source, 'prednisona', 1, 8, async () => ({
+    kind:'ingredient',name:'prednisona',suffix:'',
+  }));
+  assert.deepEqual(result.map(hit=>hit.name),['Prednisona 20mg','Outro produto']);
+  assert.deepEqual(result.map(hit=>hit.ingredientEvidence.source),['retailer_title','retailer_field']);
 });

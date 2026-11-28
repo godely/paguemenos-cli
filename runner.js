@@ -1,6 +1,7 @@
+import { confirmCliNames } from 'drogasil-cli/cli-name-confirmation';
 import { planShoppingList, shoppingItems } from './partner-plan.js';
 import { parseArgs } from 'node:util';
-import { catalogInfo, catalogSnapshot, catalogType, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
+import { retailerComparison, catalogInfo, catalogSnapshot, catalogType, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
 import { compareOffers } from './compare.js';
 import { checkoutOrigin, point } from './location.js';
 import { validGtin } from './vtex.js';
@@ -36,7 +37,7 @@ function location(v) {
   checkoutOrigin(v.cep);
   return v.cep;
 }
-export async function run(source, argv, bin) {
+export async function run(source, argv, bin, {choicesFor} = {}) {
   let [command, ...args] = argv;
   if (!command || ['-h','--help','help'].includes(command)) {
     const help = Object.values(usage).map(s => '  '+bin+' '+s+' [--json]').join('\n');
@@ -65,6 +66,22 @@ export async function run(source, argv, bin) {
     if (command==='plan') items=shoppingItems(words,v);
     if (command==='snapshot' && (!['collect','read','export'].includes(words[0]) || words.length<2 || !Number.isSafeInteger(Number(v.offset??0)) || Number(v.offset??0)<0)) throw Error(usage.snapshot);
   } catch(error) { return usageError(error.message); }
+  if (['search','compare','info','plan'].includes(command)) {
+    const queries = command === 'plan' ? items.map(item => item.sku ?? item.query) :
+      command === 'info' ? words : [words.join(' ')];
+    const {names, pending} = await confirmCliNames(queries, {json:v.json, choicesFor, suggest:source.suggest?.bind(source), write:text => console.error(text)});
+    if (pending) {
+      if (v.json) {
+        const result = command === 'search' ? [] : command === 'plan' ? {...pending, items, tables:[], plans:[]} :
+          command === 'info' ? {...pending, results:[]} : {...pending, products:[]};
+        console.log(JSON.stringify(result, null, 2));
+      }
+      process.exitCode=3;
+      return;
+    }
+    if (command === 'plan') items = items.map((item, i) => item.sku ? item : {...item, query:names[i]});
+    else words = names;
+  }
   const query=words.join(' '), limit=Number(v.limit??20), columns=['sku','name','type','seller','currentPrice','inStock'];
   if (command==='plan') {
     const result=await planShoppingList(bin,source,items,origin);
@@ -164,7 +181,13 @@ export async function run(source, argv, bin) {
   }
   let rows;
   if(command==='search') {
-    rows=await source.search(query,Number(v.page??1),limit);
+    const page = Number(v.page ?? 1);
+    if (source.byGtin && /\S\s.*\bgotas?\b/iu.test(query)) {
+      const result = await retailerComparison({retailer:bin, query, includeGenerics:false}, source);
+      rows = (result.candidates ?? result.products ?? []).slice((page - 1) * limit, page * limit);
+    } else {
+      rows = await (source.searchCatalog ?? source.search).call(source, query, page, limit);
+    }
     if (!rows.length && Number(v.page??1)===1) {
       try { const terms=(await source.suggest?.(query)??[]).filter(s=>s.toLowerCase()!==query.toLowerCase()); if(terms.length) console.error('Você quis dizer '+terms[0]+'?'); }
       catch(error) { console.error('Sugestões indisponíveis. '+error.message); }
