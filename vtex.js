@@ -27,52 +27,81 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
     const query = new URLSearchParams({
       ...params, _from: String(start), _to: String(start + limit - 1),
     }).toString().replaceAll('+', '%20');
-    const response = await getResponse('/api/catalog_system/pub/products/search?' + query);
+    const path = '/api/catalog_system/pub/products/search?' + query;
+    const response = await getResponse(path);
     const data = await response.json();
     if (!Array.isArray(data)) throw new Error('Unexpected catalog response');
     const range = /^(\d+)-\d+\/(\d+)$/.exec(response.headers.get('resources') ?? '');
     if (range && Number(range[1]) !== start) throw new Error('Unexpected catalog result range');
     const finished = data.length < limit || (range !== null && start + data.length >= Number(range[2]));
-    return { products: data, finished };
+    return { products: data, finished, sourceUrl: new URL(path, site).href, observedAt: new Date().toISOString() };
   }
 
-  function offers(product) {
+  function catalogIdentity(product, item, page) {
+    const facts = Object.fromEntries((product.allSpecifications ?? []).map(key => [key, product[key]]));
+    return { retailer:name, sku:String(item.itemId), gtin:validGtin(String(item.ean)) ? String(item.ean) : null,
+      name:item.nameComplete || item.name, itemName:item.name, brand:product.brand, productUrl:product.link,
+      categoryPaths:(product.categories ?? []).filter(path => typeof path === 'string'),
+      sourceUrl:page.sourceUrl, observedAt:page.observedAt, facts };
+  }
+
+  function offers(product, page) {
     return product.items.flatMap(item => item.sellers.map(seller => {
       const offer = seller.commertialOffer ?? {};
-      const facts = Object.fromEntries((product.allSpecifications ?? []).map(key => [key, product[key]]));
-      return { retailer: name, sku: String(item.itemId), gtin: validGtin(String(item.ean)) ? String(item.ean) : null,
-        name: item.nameComplete || item.name, itemName: item.name, brand: product.brand, productUrl: product.link,
-        sellerId: String(seller.sellerId), seller: seller.sellerName, currency: 'BRL', currentPrice: offer.IsAvailable === false && offer.Price === 0 ? null : price(offer.Price),
-        listPrice: offer.IsAvailable === false && offer.ListPrice === 0 ? null : price(offer.ListPrice), inStock: typeof offer.IsAvailable === 'boolean' ? offer.IsAvailable : null,
-        priceScope: 'anonymous_online', observedAt: new Date().toISOString(), facts };
+      return { ...catalogIdentity(product, item, page), sellerId:String(seller.sellerId), seller:seller.sellerName, currency:'BRL',
+        currentPrice: offer.IsAvailable === false && offer.Price === 0 ? null : price(offer.Price),
+        listPrice: offer.IsAvailable === false && offer.ListPrice === 0 ? null : price(offer.ListPrice),
+        inStock: typeof offer.IsAvailable === 'boolean' ? offer.IsAvailable : null,
+        isDefaultSeller: typeof seller.sellerDefault === 'boolean' ? seller.sellerDefault : null,
+        onlineStockSignal: Number.isSafeInteger(offer.AvailableQuantity) && offer.AvailableQuantity >= 0 ? offer.AvailableQuantity : null,
+        priceScope:'anonymous_online' };
     }));
   }
 
-  async function catalog(params, page = 1, limit = 20) {
-    const { products } = await catalogPage(params, page, limit);
-    return products.flatMap(offers);
+  function identities(product, page) {
+    return product.items.map(item => catalogIdentity(product, item, page));
   }
 
-  async function search(query, page = 1, limit = 20) {
+  async function catalog(params, page = 1, limit = 20) {
+    const catalog = await catalogPage(params, page, limit);
+    return catalog.products.flatMap(product => offers(product, catalog));
+  }
+
+  async function search(query, page = 1, limit = 20, project = offers) {
     checkPage(page, limit, 1000);
-    if (!prepareSearch && limit<=50) return catalog({ ft: query }, page, limit);
+    if (!prepareSearch && limit<=50) {
+      const result = await catalogPage({ ft:query }, page, limit);
+      return result.products.flatMap(product => project(product, result));
+    }
     const { text, matches } = prepareSearch?.(query) ?? {text:query,matches:()=>true};
     const start = (page - 1) * limit;
     const rows = [];
     let matched = 0;
     for (let sourcePage = 1; ; sourcePage++) {
-      const { products, finished } = await catalogPage({ ft: text }, sourcePage, 50);
-      for (const product of products) {
-        const accepted = offers(product).filter(matches);
+      const catalog = await catalogPage({ ft: text }, sourcePage, 50);
+      for (const product of catalog.products) {
+        const accepted = project(product, catalog).filter(matches);
         if (!accepted.length) continue;
         if (matched >= start) rows.push(...accepted);
         matched++;
         if (matched - start === limit) return rows;
       }
-      if (finished) return rows;
+      if (catalog.finished) return rows;
     }
   }
 
+  async function exactFacts(field, code) {
+    const result = await catalogPage({ fq:field + ':' + code }, 1, 50);
+    return result.products.flatMap(product => identities(product, result));
+  }
+  async function facts(query, page = 1, limit = 20) {
+    if (/^\d+$/.test(query)) return (await exactFacts('skuId', query)).filter(row => row.sku === query);
+    return search(query, page, limit, identities);
+  }
+  async function factsByGtin(code) {
+    if (!validGtin(code)) throw new TypeError('Expected a valid GTIN');
+    return (await exactFacts('alternateIds_Ean', code)).filter(row => row.gtin === code);
+  }
   async function byGtin(gtin) {
     if (!validGtin(gtin)) throw new TypeError('Expected a valid GTIN');
     return (await catalog({ fq: 'alternateIds_Ean:' + gtin })).filter(p => p.gtin === gtin);
@@ -110,7 +139,7 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
     const [result] = await basket([{offer,quantity}],zipcode);
     return result;
   }
-  return { name, site, search, product, byGtin, local, basket };
+  return { name, site, search, product, byGtin, facts, factsByGtin, local, basket };
 }
 
 function quoteLine(offer, quantity, data, verifiedScope) {

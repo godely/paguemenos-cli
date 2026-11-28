@@ -1,7 +1,87 @@
-import { physicalShopping } from './branch-shopping.js';
+import { hasPickupOffer, physicalShopping, permitsStockExpansion } from './branch-shopping.js';
 import { inventoryConfig } from './branch-inventory.js';
+import { crossRetailerPlans } from './pickup-plans.js';
+import { fixedStoreSource, quoteLocalOptions } from './compare.js';
 import { resolveMedication } from 'drogasil-cli';
 import { retailerComparison, retailerBasket } from 'drogasil-cli/retailer-workflows';
+
+const words = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu,'')
+  .toLowerCase().replace(/[^\p{L}0-9]+/gu,' ').trim();
+
+export function matchesRequestedBrand(product,requested) {
+  const brand = words(product.brand), family = words(requested);
+  const trade = words(product.requestedTradeName);
+  if (trade && product.role === 'requested') {
+    if (trade === family) return true;
+    if (product.matchBasis === 'verified_drop_presentation_and_barcode' && family.startsWith(trade+' ') &&
+        (words(product.requestedReferenceTitle)+' ').startsWith(family+' ')) return true;
+  }
+  if (!brand || !family) return false;
+  if (brand === family) return true;
+  // The family must name this retailer-declared brand and appear verbatim
+  // in the title. A competitor mentioning the same line cannot qualify.
+  return (' '+family+' ').includes(' '+brand+' ') && (' '+words(product.name)+' ').includes(' '+family+' ');
+}
+
+// A shopper may abbreviate a generic manufacturer to the first complete word.
+// Take a shortened name only when the product title confirms the full catalog
+// brand and exactly one distinct brand in this presentation fits it.
+export function selectBrandOptions(products, requested, includeGenerics) {
+  const exact = products.filter(p => matchesRequestedBrand(p,requested));
+  const accepted = new Set(exact);
+  const short = words(requested);
+  if (!exact.length && /^\p{L}{4,}$/u.test(short) &&
+      !['laboratorio','laboratorios','industria','grupo','generico','pharma','farma'].includes(short)) {
+    const candidates = products.filter(p => {
+      const brand = words(p.brand);
+      return p.type === 'Genérico' && brand.startsWith(short+' ') &&
+        (' '+words(p.name)+' ').includes(' '+brand+' ');
+    });
+    const names = [...new Set(candidates.map(p=>words(p.brand)))];
+    if (names.length > 1) return {needsBrandChoice:true, brands:[...new Set(candidates.map(p=>p.brand))], products:[]};
+    for (const p of candidates) accepted.add(p);
+  }
+  return {products:products.filter(p => accepted.has(p) ||
+    (includeGenerics && p.role === 'generic' && p.type === 'Genérico'))};
+}
+
+// A normal name comparison only needs two distinct results to ask which pack.
+// A returning shopper may have chosen a later result in a previous catalog page.
+function selectedCatalog(source, sku) {
+  const scoped = Object.create(source);
+  scoped.search = async (query, page, limit) => {
+    const initial = await source.search(query, page, limit);
+    if (page !== 1 || limit !== 2 || initial.some(row => row.sku === sku) ||
+        new Set(initial.map(row => row.sku)).size < 2) return initial;
+
+    const seen = new Set();
+    for (let nextPage = 1; ; nextPage++) {
+      const rows = await source.search(query, nextPage, 50);
+      const selected = rows.filter(row => row.sku === sku);
+      if (selected.length) return selected;
+      const previous = seen.size;
+      for (const row of rows) seen.add(row.sku);
+      if (rows.length < 50 || seen.size === previous) return initial;
+    }
+  };
+  return scoped;
+}
+
+async function comparisonForItem(retailer, source, item) {
+  const namedSelection = item.sku && !/^\d+$/.test(item.query);
+  const query = namedSelection ? item.query : item.sku ?? item.query;
+  const includeGenerics = Boolean(item.includeGenerics || item.genericOnly) && (!item.sku || Boolean(namedSelection));
+  const comparison = await retailerComparison({retailer, query, includeGenerics},
+    namedSelection ? selectedCatalog(source, item.sku) : source);
+  if (!namedSelection) return comparison;
+
+  // Keep the verified trade name, presentation and seller attached to the choice.
+  const {candidates, products, ...summary} = comparison;
+  const selected = (products ?? candidates ?? []).filter(row => row.sku === item.sku);
+  if (selected.length) return {...summary, status:candidates ? 'matches' : summary.status, products:selected};
+  const status = ['source_failed','partial'].includes(summary.status) ? summary.status : 'selected_presentation_unverified';
+  return {...summary, status, products:[]};
+}
 
 export async function quoteShoppingList(retailer, source, items, origin, resolve = resolveMedication, options = {}) {
   const pendingBrands = [];
@@ -10,34 +90,101 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
     if ((await resolve(item.query)).kind === 'brand') pendingBrands.push(item.query);
   }
   if (pendingBrands.length) return {retailerId:retailer,status:'needs_generic_preference',pendingBrands};
-  const config=inventoryConfig(retailer);
-  const physical=Boolean(options.store || options.expandSearch || config);
-  const lines = [], tables = [], selections = [];
+  const config = inventoryConfig(retailer);
+  const includeInventory = Boolean(config || options.store || options.expandSearch);
+  const selections = [], lines = [], tables = [];
+  async function withInventory(checkout) {
+    if (!includeInventory) return checkout;
+    const physical = await physicalShopping(retailer, source, items, selections, origin,
+      {...options, allowExpansion:permitsStockExpansion(checkout)}, config);
+    return {...physical, checkout};
+  }
   for (const item of items) {
     let selection;
-    try {
-      selection = await retailerComparison({retailer, query:item.sku ?? item.query,
-        includeGenerics:!item.sku && Boolean(item.includeGenerics || item.genericOnly)},source);
-    } catch (error) {
-      if (!physical) throw error;
+    try { selection = await comparisonForItem(retailer,source,item); }
+    catch (error) {
+      if (!includeInventory) throw error;
       selection = {status:'catalog_lookup_failed',products:[]};
     }
     let rows=selection.products ?? [];
     if (item.genericOnly) rows=rows.filter(p=>p.type==='Genérico');
-    if (item.brand) {
-      const brand=item.brand.trim().toLocaleLowerCase('pt-BR');
-      rows=rows.filter(p=>p.brand?.trim().toLocaleLowerCase('pt-BR')===brand ||
-        (p.name.toLocaleLowerCase('pt-BR')+' ').startsWith(brand+' ') || (item.includeGenerics && p.role==='generic'));
+    if (item.brand && rows.length) {
+      const choice = selectBrandOptions(rows,item.brand,item.includeGenerics);
+      if (choice.needsBrandChoice) {
+        selections.push({...selection, status:'choose_manufacturer', products:[], brands:choice.brands});
+        tables.push({query:item.query,status:'choose_manufacturer',brands:choice.brands,choices:[]});
+        continue;
+      }
+      rows = choice.products;
+      if (!rows.length) {
+        selections.push({...selection, status:'requested_brand_not_found', products:[]});
+        tables.push({query:item.query,status:'requested_brand_not_found',brand:item.brand,choices:[]});
+        continue;
+      }
     }
-    selections.push({...selection,products:rows});
+    selections.push({...selection, products:rows});
+    if (items.length === 1 && ((source.fixedStore && !selection.candidates) || selection.scope === 'direct_requested_pack' || selection.scope === 'equivalents_in_reference_catalog' || selection.scope === 'verified_drop_presentation') && rows.length) {
+      const result = await quoteLocalOptions({...selection, products:rows}, source, origin, item.quantity ?? 1);
+      const available = result.products.some(p => p.localStatus === 'available');
+      const status = result.status === 'source_failed' ? 'source_failed' : available ? 'fulfillable' :
+        (result.status === 'partial' || result.unverified?.length || result.products.some(p => p.localStatus !== 'unavailable')) ? 'unverified' : 'unavailable';
+      return withInventory({ ...result, status, quoteStatus:result.status, planningScope:'one_pack_alternatives',
+        tables:[{query:item.query, status, choices:result.products}], routeStatus:'branch_inventory_unverified' });
+    }
     const choices=new Set(rows.map(p=>p.sku));
-    tables.push({query:item.query,status:selection.status,choices:selection.candidates??rows});
-    if (choices.size===1) lines.push({sku:rows[0].sku,quantity:item.quantity});
+    const verifiedChoices = rows.filter(row=>row.sku && row.sellerId).map(({sku,sellerId})=>({sku,sellerId}));
+    tables.push({query:item.query,status:selection.status,choices:selection.candidates??rows,verifiedChoices});
+    if (choices.size===1) lines.push({sku:rows[0].sku,quantity:item.quantity ?? 1});
   }
-  if (physical) return physicalShopping(retailer,source,items,selections,origin,options,config);
-  if(lines.length!==items.length) return {retailerId:retailer,status:'choose_products',tables};
-  return {...await retailerBasket({retailer,items:lines,zipcode:origin},source),tables,
-    planningScope:'whole_basket_fulfillment',routeStatus:'branch_inventory_unverified'};
+  if(lines.length!==items.length) return withInventory({retailerId:retailer,status:'choose_products',tables});
+  let checkout;
+  try { checkout = await retailerBasket({retailer,items:lines,zipcode:origin},source); }
+  catch (error) {
+    if (!includeInventory) throw error;
+    checkout = {retailerId:retailer,status:'source_failed',items:[]};
+  }
+  return withInventory({...checkout,tables, planningScope:'whole_basket_fulfillment',routeStatus:'branch_inventory_unverified'});
+}
+
+// Catalog reads can recur for several candidate baskets in one shopping request.
+// Checkout quotes still use the retailer and origin for that request.
+export function shoppingSource(source) {
+  const cached = Object.create(source);
+  for (const name of ['product','search','byGtin','stores']) {
+    if (typeof source[name] !== 'function') continue;
+    const reads = new Map();
+    cached[name] = (...args) => {
+      const key = JSON.stringify(args);
+      if (!reads.has(key)) reads.set(key,source[name](...args));
+      return reads.get(key);
+    };
+  }
+  return cached;
+}
+
+export function quoteChosenOffers(retailer,source,lines,origin) {
+  return retailerBasket({retailer,zipcode:origin,items:lines.map(line=>({
+    sku:line.selectedSku,sellerId:line.sellerId,quantity:line.quantity ?? 1,
+  }))},source);
+}
+
+export async function planShoppingList(retailer,provider,items,origin,store,expandSearch = false) {
+  let source = shoppingSource(provider);
+  if (store) source = fixedStoreSource(retailer, source, origin, store);
+  const result = await planWithSource(retailer,source,items,origin,{store,expandSearch});
+  return store ? source.withStoreEvidence(result) : result;
+}
+
+async function planWithSource(retailer,source,items,origin,options) {
+  const raw = await quoteShoppingList(retailer,source,items,origin,undefined,options);
+  if (raw.stockEvidence === 'retailer_branch_snapshot' && (raw.status === 'complete' || !hasPickupOffer(raw.checkout))) return raw;
+  const {checkout, ...inventory} = raw;
+  const result = checkout ? {...checkout, purchase:inventory} : raw;
+  if (items.length < 2 || result.pendingBrands) return result;
+  const pickupPlans = await crossRetailerPlans([{...result,retailerId:retailer}],items,(_,indices,chosen) =>
+    chosen ? quoteChosenOffers(retailer,source,chosen,origin) :
+      quoteShoppingList(retailer,source,indices.map(i=>items[i]),origin).then(subset => subset.checkout ?? subset));
+  return {...result,pickupPlans};
 }
 
 export function shoppingItems(words, flags) {
