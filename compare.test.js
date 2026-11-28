@@ -42,3 +42,21 @@ test('pickup price ignores delivery-only and failed listings and honors requeste
   assert.equal(r.lowestPricedPickup.requestedQuantity,2);
   assert.equal(r.products.filter(p=>p.localStatus==='lookup_failed').length,1);
 });
+
+test('brand-first display and the lowest eligible pickup price are independent in all verified presentation scopes',async()=>{
+  const products=[
+    {sku:'brand',role:'requested_brand',currentPrice:24},
+    {sku:'generic',role:'generic',currentPrice:12},
+    {sku:'shipping',role:'generic',currentPrice:5},
+    {sku:'unknown',role:'generic',currentPrice:null},
+  ];
+  const source={local:async(row,origin,quantity)=>({...row,localStatus:'available',requestedQuantity:quantity,
+    methods:row.sku==='shipping'?[{channel:'delivery'}]:[{channel:'pickup-in-point',pickupPointId:'Filial'}]})};
+  for (const scope of ['direct_requested_pack','equivalents_in_reference_catalog','verified_drop_presentation']) {
+    const result=await quoteLocalOptions({scope,status:'matches',products},source,'origem',2);
+    assert.equal(result.products[0].sku,'brand');
+    assert.equal(result.lowestPricedPickup.sku,'generic');
+    assert.equal(result.lowestPricedPickup.currentPrice,12);
+    assert.equal(result.lowestPricedPickup.requestedQuantity,2);
+  }
+});

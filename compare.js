@@ -51,10 +51,12 @@ export async function quoteLocalOptions(result, source, origin, quantity) {
   products.sort((a,b) => Number(a.role==='generic') - Number(b.role==='generic') ||
     (a.currentPrice ?? Infinity) - (b.currentPrice ?? Infinity) || String(a.sku).localeCompare(String(b.sku)));
   const status = products.length && failures === products.length ? 'source_failed' : failures || partial ? 'partial' : result.status;
-  if (result.scope === 'direct_requested_pack') {
-    const pickup = products.filter(p => p.localStatus === 'available' && p.methods.some(m =>
-      m.channel === 'pickup-in-point' && m.pickupPointId));
-    const best = pickup.find(p => Number.isFinite(p.currentPrice));
+  if (['direct_requested_pack','equivalents_in_reference_catalog','verified_drop_presentation'].includes(result.scope)) {
+    let best;
+    for (const product of products) {
+      const pickup = product.localStatus === 'available' && product.methods.some(m => m.channel === 'pickup-in-point' && m.pickupPointId);
+      if (pickup && Number.isFinite(product.currentPrice) && (!best || product.currentPrice < best.currentPrice)) best = product;
+    }
     return { ...result, status, products, stockEvidence:'fulfillment_quote',
       lowestPricedPickup:best ? {sku:best.sku,sellerId:best.sellerId,name:best.name,currentPrice:best.currentPrice,
         requestedQuantity:quantity,branchQuantity:null} : null };

@@ -3,7 +3,7 @@ import {hasPickupOffer} from './branch-shopping.js';
 import { confirmCliNames } from 'drogasil-cli/cli-name-confirmation';
 import { planShoppingList, shoppingItems } from './partner-plan.js';
 import { parseArgs } from 'node:util';
-import { renderInfoResult, infoExitCode, renderPurchase, purchaseExitCode, acceptExpansion, retailerComparison, catalogInfo, catalogSnapshot, catalogType, requestsDrops, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
+import { renderInfoResult, infoExitCode, renderPurchase, purchaseExitCode, purchaseCatalogNotice, acceptExpansion, retailerComparison, catalogInfo, catalogSnapshot, catalogType, requestsDrops, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
 import { inventoryConfig, lookupBranchStock } from './branch-inventory.js';
 import { compareOffers } from './compare.js';
 import { checkoutOrigin, point } from './location.js';
@@ -148,8 +148,13 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     }
     else if(result.pendingBrands) console.log('Quer considerar genéricos para '+result.pendingBrands.join(', ')+'?');
     else {
-      console.log(result.status);
-      for(const table of result.tables??[]) { console.log(table.query); emit(table.choices,false,['name','type','currentPrice']); }
+      if (result.status !== 'choose_products' || !result.tables?.length) console.log(result.status);
+      for (const table of result.tables ?? []) {
+        console.log(/^\d+$/.test(table.query) ? 'Produto solicitado' : table.query);
+        const notice = purchaseCatalogNotice(table);
+        if (notice) console.log(notice);
+        if (table.choices?.length) emit(table.choices,false,['name','type','currentPrice']);
+      }
       if(result.items) printQuotes(result.items);
       if(result.commonPickupPoints?.length) console.table(result.commonPickupPoints);
       if(result.estimatedProductTotalBRL!=null) console.log('Subtotal estimado (BRL)',result.estimatedProductTotalBRL);
