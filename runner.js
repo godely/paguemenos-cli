@@ -17,7 +17,7 @@ const usage = {
   compare: 'compare <name or SKU> [--brand-only] [--cep CEP | --lat LAT --lon LON] [--store nearest|ID | --expand]',
   stock: 'stock <SKU> (--cep CEP | --lat LAT --lon LON) [--min-qty N | --quantity N | --all] [--max-branches N] [--expand]',
   stores: 'stores [--cep CEP | --lat LAT --lon LON]',
-  snapshot: 'snapshot collect <query...> [--limit N] | read <run-id> [--offset N --limit N] | export <run-id> --format json|csv|xlsx',
+  snapshot: 'snapshot collect [query...] [--limit N] | read <run-id> [--offset N --limit N] | export <run-id> --format json|csv|xlsx',
 };
 const flags = {
   plan:['cep','lat','lon','quantity','sku','brand','generic','brand-only','include-generics','store','expand'],
@@ -79,7 +79,12 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     if (command === 'gtin' && (words.length!==1 || !validGtin(words[0]))) throw Error(usage.gtin);
     if (!positive(v.page??1) || !positive(v.limit??1, ['search','snapshot'].includes(command)?1000:50) || (command==='stock' && !positive(v.quantity??v['min-qty']??1))) throw Error('Invalid page, limit or quantity');
     if (command==='plan') items=shoppingItems(words,v);
-    if (command==='snapshot' && (!['collect','read','export'].includes(words[0]) || words.length<2 || !Number.isSafeInteger(Number(v.offset??0)) || Number(v.offset??0)<0)) throw Error(usage.snapshot);
+    if (command==='snapshot') {
+      const [action, ...terms] = words;
+      const offset = Number(v.offset ?? 0);
+      if (!['collect','read','export'].includes(action) || (action !== 'collect' && terms.length !== 1) ||
+          !Number.isSafeInteger(offset) || offset < 0) throw Error(usage.snapshot);
+    }
   } catch(error) { return usageError(error.message, args.includes('--json')); }
   if (['search','compare','info','plan'].includes(command)) {
     const queries = command === 'plan' ? items.map(item => item.sku ?? item.query) :
