@@ -57,3 +57,17 @@ test('a complete active ingredient line can end at the next section without list
   for (const rest of [' e outro ativo', ' + outra substância 1mg', '<p>Princípio ativo: Outro</p>'])
     assert.deepEqual(make(section+rest),{});
 });
+
+test('prescription statement must concern the exact single pack in its own overview', async () => {
+  const {descriptionEvidence} = await import('./composition.js');
+  const statement = 'Este medicamento deve ser utilizado sob prescrição médica e orientação profissional';
+  const overview = '<h2>O que é '+name+'?</h2><p>'+statement;
+  const check = (description, items=[item]) => descriptionEvidence({...product,description,items},item,{}).prescriptionEvidence;
+  assert.equal(check(overview+', sendo uma opção.</p>').text,statement);
+  for (const description of [
+    overview+' se houver outra condição.</p>', overview+', caso necessário.</p>',
+    overview.replace(name,'Medicamento diferente')+'.</p>', overview.replace('O que é','Interações de')+'.</p>',
+    '<h2>O que é '+name+'?</h2><p>Texto.</p><h2>Advertências</h2>'+statement+'.',
+  ]) assert.equal(check(description),undefined);
+  assert.equal(check(overview+'.</p>',[item,item]),undefined);
+});
