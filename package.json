@@ -22,6 +22,6 @@
     "test": "node --test"
   },
   "dependencies": {
-    "drogasil-cli": "https://codeload.github.com/godely/drogasil-cli/tar.gz/bc3ddfc6387b6bbf03078a1900c04a0f6bfe4690"
+    "drogasil-cli": "https://codeload.github.com/godely/drogasil-cli/tar.gz/13514aba1a253e9b1cc5bbf753753ee25b35bbf6"
   }
 }
