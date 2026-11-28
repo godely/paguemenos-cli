@@ -97,11 +97,27 @@ function partnerBlocks(result, id, indices, items) {
     .map(m => pickupBlock(id,m,products,indices,items));
 }
 
+// A completed quote can contain a failed line alongside a usable pickup.
+function quoteProblem(quote) {
+  const rows = quote.items ?? quote.products ?? [];
+  if (quote.status === 'source_failed' || quote.quoteStatus === 'source_failed' ||
+      quote.pending?.some(p => p.status === 'source_failed') ||
+      rows.some(p => p.localStatus === 'lookup_failed' || p.pickupVerification?.status === 'directory_failed')) {
+    return 'lookup_failed';
+  }
+  if (['unconfirmed','unverified','unresolved_items'].includes(quote.status) ||
+      rows.some(p => p.localStatus === 'unverified' || p.pickupVerification?.status === 'incomplete')) {
+    return 'pickup_unknown';
+  }
+  return null;
+}
+
 async function collectPartnerBlocks(result, items, quoteSubset) {
   const id = result.retailerId;
   const indices = items.map((_,i) => i);
   const blocks = partnerBlocks(result,id,indices,items);
-  const failures = [];
+  const initialProblem = quoteProblem(result);
+  const failures = initialProblem ? [{itemIndices:indices,reason:initialProblem}] : [];
   const singleOutcomes = new Map();
   let jointChecks = 0, combinations = 0, limited = false;
   const fixedCache = new Map();
@@ -130,7 +146,8 @@ async function collectPartnerBlocks(result, items, quoteSubset) {
     }
     try {
       const quote = await fixedCache.get(key);
-      if (['source_failed','unconfirmed','unresolved_items'].includes(quote.status)) failures.push(subset);
+      const reason = quoteProblem(quote);
+      if (reason) failures.push({itemIndices:subset,reason});
       const quoted = quote.items ?? [];
       if (quoted.length !== chosen.length || !quoted.every((p,j)=>
         p.sku === chosen[j].selectedSku && p.sellerId === chosen[j].sellerId)) return;
@@ -138,7 +155,7 @@ async function collectPartnerBlocks(result, items, quoteSubset) {
         blocks.push([{...stop,pickups:stop.pickups.flatMap(pick => grouped[pick.item].indices.map(i =>
           ({...pick,item:i,packs:items[i].quantity ?? 1})))}]);
       }
-    } catch { failures.push(subset); }
+    } catch { failures.push({itemIndices:subset,reason:'lookup_failed'}); }
   }
 
   async function checkCombinations(subset, quote) {
@@ -177,7 +194,8 @@ async function collectPartnerBlocks(result, items, quoteSubset) {
     if (!quoteCache.has(key)) quoteCache.set(key,quoteSubset(id,subset));
     try {
       const quote = await quoteCache.get(key);
-      if (subset.length === 1) {
+      const reason = quoteProblem(quote);
+      if (subset.length === 1 && !reason) {
         const rows = quote.products ?? quote.items ?? [];
         if (rows.length && rows.every(p => ['available','unavailable'].includes(p.localStatus) &&
             p.requestedQuantity === (items[subset[0]].quantity ?? 1)) &&
@@ -186,10 +204,10 @@ async function collectPartnerBlocks(result, items, quoteSubset) {
           singleOutcomes.set(subset[0],'pickup_not_offered');
         }
       }
-      if (['source_failed','unconfirmed','unverified','unresolved_items'].includes(quote.status)) failures.push(subset);
+      if (reason) failures.push({itemIndices:subset,reason});
       blocks.push(...partnerBlocks(quote,id,subset,items));
       await checkCombinations(subset,quote);
-    } catch { failures.push(subset); }
+    } catch { failures.push({itemIndices:subset,reason:'lookup_failed'}); }
   };
   // For each chain check its locally resolvable part together as well as
   // separate visits. Bound additional outbound calls on long shopping lists.
@@ -363,9 +381,10 @@ function lineOutcome(result,report,i) {
   if (status === 'no_reference') return 'reference_missing';
   if (status === 'partial' && !catalog?.choices?.length) return 'catalog_failed';
   if (stock?.failed?.length) return 'stock_failed';
-  if (checkout.status === 'source_failed' || report.failures.some(indices => indices.length === 1 && indices[0] === i)) return 'lookup_failed';
+  if (checkout.status === 'source_failed' || report.failures.some(f => f.reason === 'lookup_failed' && f.itemIndices.length === 1 && f.itemIndices[0] === i)) return 'lookup_failed';
   if (stock?.unknown?.length) return 'stock_unknown';
   if (stock?.unavailable?.length && !stock.rows?.length) return 'insufficient_stock';
+  if (report.failures.some(f => f.itemIndices.length === 1 && f.itemIndices[0] === i)) return 'pickup_unknown';
   return report.singleOutcomes?.get(i) ?? 'pickup_unknown';
 }
 
@@ -398,6 +417,6 @@ function summarizePlans(reports,results,items) {
     plans:partial ? [] : plans, comparison:partial ? null : comparison,
     ...(partial && {partialBasket:{filledCount:covered,requestedCount:items.length,plans,comparison,
       ...(covered === 0 && {unfilled:pending})}}),
-    lookupFailures:reports.flatMap((r,j) => r.failures.map(itemIndices => ({retailerId:results[j].retailerId,itemIndices}))),
+    lookupFailures:reports.flatMap((r,j) => r.failures.map(failure => ({retailerId:results[j].retailerId,...failure}))),
     searchLimited:limited || reports.some(r => r.limited)};
 }
