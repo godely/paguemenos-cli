@@ -85,12 +85,15 @@ export async function run(source, argv, bin) {
     return;
   }
   if (command==='info') {
-    const data=await catalogInfo({retailer:bin,queries:words,scope:v.brazil?'brazil':'catalog'},source);
-    // Preserve the original SKU-only response shape for existing callers.
+    // Preserve the original SKU-only response for existing callers.
     if (words.length===1 && /^\d+$/.test(words[0]) && !v.brazil) {
-      const rows=data.results[0].products;
-      if (v.json) console.log(JSON.stringify(rows,null,2)); else console.table(rows);
-    } else if (v.json) console.log(JSON.stringify(data,null,2));
+      const rows=await source.product(words[0]);
+      console.log(JSON.stringify(rows,null,2));
+      if(!rows.length) process.exitCode=3;
+      return;
+    }
+    const data=await catalogInfo({retailer:bin,queries:words,scope:v.brazil?'brazil':'catalog'},source);
+    if (v.json) console.log(JSON.stringify(data,null,2));
     else for (const result of data.results) {
       console.log(result.query, result.status);
       console.table(result.products.map(p=>({name:p.name, strengths:p.strengths.join(', '),forms:p.forms.join(', '),prescription:p.prescriptionLabel.join(', ')||'não confirmado',retention:p.retentionLabel.join(', ')||'não confirmado',source:p.source})));

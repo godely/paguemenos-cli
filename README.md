@@ -21,7 +21,7 @@ Product details include the retailer's original specification fields. Stock perf
 
 ### Standalone catalog and location workflows
 
-Use `info "name" "another name" --json` for retailer facts or add `--brazil` for sourced national presentations. A single numeric SKU keeps an array response. `compare <name or SKU>` checks equivalent packs in this retailer's catalog and accepts `--brand-only`. `product` accepts ordered SKU batches, preserving all sellers and missing slots. `snapshot collect|read|export` shares the durable catalog format and supports JSON, CSV and XLSX.
+Use `info "name" "another name" --json` for retailer facts or add `--brazil` for sourced national presentations. A single numeric SKU keeps an array response. `compare <name or SKU>` checks equivalent packs in this retailer's catalog and accepts `--brand-only`. `product` accepts ordered SKU batches, preserving all sellers and missing slots. `snapshot collect|read|export` shares the durable catalog format and supports JSON, CSV and XLSX. All snapshot commands also require Python 3 (`python3` on PATH) for SQLite storage and exports.
 
 `stores --cep CEP` or `stores --lat LAT --lon LON` reads the Pague Menos store locator for that origin. `stock SKU` accepts either origin and an optional `--min-qty N`. The resulting quantity is the quantity requested from checkout. A successful quote confirms that fulfillment method. Branch inventory and nationwide directory coverage remain open.
 
