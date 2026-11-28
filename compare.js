@@ -10,8 +10,8 @@ export async function compareOffers(args, source, compare = retailerComparison) 
   const origin = args.coordinates ?? args.zipcode;
   const hasCheckout = typeof source.local === 'function';
   if (args.store) source = fixedStoreSource(args.retailer, source, origin, args.store);
-  const result = await compare(args, source);
-  if (!origin || !result.products?.length) return result;
+  const result = await quotePresentationOptions(await compare(args,source),source,origin,1);
+  if (!origin || !result.products?.length) return args.store ? source.withStoreEvidence(result) : result;
   const config = inventoryConfig(args.retailer);
   const physical = args.store || args.expandSearch || config;
   const quoted = hasCheckout
@@ -41,10 +41,10 @@ export async function quoteLocalOptions(result, source, origin, quantity) {
       const pickup = quote.methods.filter(m => m.channel === 'pickup-in-point' && m.pickupPointId);
       const measured = pickup.length && pickup.every(m => Number.isFinite(m.distanceKm));
       const closest = measured ? pickup.reduce((a,b) => a.distanceKm <= b.distanceKm ? a : b) : null;
-      products.push({...quote, closestQuotedPickup:closest, branchQuantity:null});
+      products.push({...row,...quote, requestedQuantity:quantity, closestQuotedPickup:closest, branchQuantity:null});
     } catch {
       failures++;
-      products.push({...row, localStatus:'lookup_failed', ...(source.fixedStore && {pickupAtStore:'lookup_failed'}), methods:[], closestQuotedPickup:null, branchQuantity:null});
+      products.push({...row, requestedQuantity:quantity, localStatus:'lookup_failed', ...(source.fixedStore && {pickupAtStore:'lookup_failed'}), methods:[], closestQuotedPickup:null, branchQuantity:null});
     }
   }
   // Keep the requested brand first and sort within each group by its updated price.
@@ -62,4 +62,12 @@ export async function quoteLocalOptions(result, source, origin, quantity) {
         requestedQuantity:quantity,branchQuantity:null} : null };
   }
   return {...result,status,products,stockEvidence:'fulfillment_quote'};
+}
+
+// These are independent named offers. Never turn them into lines in the
+// original brand basket or count them as inventory of the requested brand.
+export async function quotePresentationOptions(selection, source, origin, quantity) {
+  if (!origin || !selection.comparisonOptions?.length || typeof source.local !== 'function') return selection;
+  const quoted = await quoteLocalOptions({status:'matches',products:selection.comparisonOptions},source,origin,quantity);
+  return {...selection, comparisonOptions:quoted.products, comparisonQuoteStatus:quoted.status};
 }

@@ -1,7 +1,7 @@
 import { hasPickupOffer, physicalShopping, permitsStockExpansion, referenceDetails } from './branch-shopping.js';
 import { inventoryConfig } from './branch-inventory.js';
 import { crossRetailerPlans } from './pickup-plans.js';
-import { fixedStoreSource, quoteLocalOptions } from './compare.js';
+import { fixedStoreSource, quoteLocalOptions, quotePresentationOptions } from './compare.js';
 import { resolveMedication } from 'drogasil-cli';
 import { matchesRetailBrandLine } from 'drogasil-cli/medication-catalog';
 import { retailerComparison, retailerBasket } from 'drogasil-cli/retailer-workflows';
@@ -107,6 +107,12 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
     catch (error) {
       if (!includeInventory) throw error;
       selection = {status:'catalog_lookup_failed',products:[]};
+    }
+    if (selection.comparisonOptions?.length) {
+      const filterManufacturer = item.brand && words(item.brand)!==words(selection.requestedBrand?.name);
+      const relevant = item.sku ? [] : filterManufacturer ?
+        selectBrandOptions(selection.comparisonOptions,item.brand,false).products : selection.comparisonOptions;
+      selection = await quotePresentationOptions({...selection,comparisonOptions:relevant},source,origin,item.quantity ?? 1);
     }
     let rows=selection.products ?? [];
     if (item.genericOnly) rows=rows.filter(p=>p.type==='Genérico');
