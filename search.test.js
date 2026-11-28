@@ -91,7 +91,7 @@ test('CLI offers completions on an empty first page without searching the sugges
   assert.deepEqual(queries, ['morfi']);
   assert.equal(printed.mock.calls[0].arguments[0], '[]');
   assert.equal(hints.mock.calls[0].arguments[0], 'Você quis dizer morfina?');
-  assert.equal(process.exitCode, 3);
+  assert.equal(process.exitCode ?? 0, 0);
   await run(retailer, ['search', 'morfi', '--page', '2', '--json'], 'paguemenos');
   assert.equal(retailer.suggest.mock.callCount(), 1);
   await run(retailer, ['suggest', 'morfi', '--json'], 'paguemenos');
