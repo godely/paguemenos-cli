@@ -38,6 +38,44 @@ export function selectBrandOptions(products, requested, includeGenerics) {
     (includeGenerics && p.role === 'generic' && p.type === 'Genérico'))};
 }
 
+// A normal name comparison only needs two distinct results to ask which pack.
+// A returning shopper may have chosen a later result in a previous catalog page.
+function selectedCatalog(source, sku) {
+  const scoped = Object.create(source);
+  scoped.search = async (query, page, limit) => {
+    const initial = await source.search(query, page, limit);
+    if (page !== 1 || limit !== 2 || initial.some(row => row.sku === sku) ||
+        new Set(initial.map(row => row.sku)).size < 2) return initial;
+
+    const seen = new Set();
+    for (let nextPage = 1; ; nextPage++) {
+      const rows = await source.search(query, nextPage, 50);
+      const selected = rows.filter(row => row.sku === sku);
+      if (selected.length) return selected;
+      const previous = seen.size;
+      for (const row of rows) seen.add(row.sku);
+      if (rows.length < 50 || seen.size === previous) return initial;
+    }
+  };
+  return scoped;
+}
+
+async function comparisonForItem(retailer, source, item) {
+  const namedSelection = item.sku && !/^\d+$/.test(item.query);
+  const query = namedSelection ? item.query : item.sku ?? item.query;
+  const includeGenerics = Boolean(item.includeGenerics || item.genericOnly) && (!item.sku || Boolean(namedSelection));
+  const comparison = await retailerComparison({retailer, query, includeGenerics},
+    namedSelection ? selectedCatalog(source, item.sku) : source);
+  if (!namedSelection) return comparison;
+
+  // Keep the verified trade name, presentation and seller attached to the choice.
+  const {candidates, products, ...summary} = comparison;
+  const selected = (products ?? candidates ?? []).filter(row => row.sku === item.sku);
+  if (selected.length) return {...summary, status:candidates ? 'matches' : summary.status, products:selected};
+  const status = ['source_failed','partial'].includes(summary.status) ? summary.status : 'selected_presentation_unverified';
+  return {...summary, status, products:[]};
+}
+
 export async function quoteShoppingList(retailer, source, items, origin, resolve = resolveMedication) {
   const pendingBrands = [];
   for (const item of items) {
@@ -47,8 +85,7 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
   if (pendingBrands.length) return {retailerId:retailer,status:'needs_generic_preference',pendingBrands};
   const lines = [], tables = [];
   for (const item of items) {
-    const selection = await retailerComparison({retailer,query:item.sku ?? item.query,
-      includeGenerics:!item.sku && Boolean(item.includeGenerics || item.genericOnly)},source);
+    const selection = await comparisonForItem(retailer,source,item);
     let rows=selection.products ?? [];
     if (item.genericOnly) rows=rows.filter(p=>p.type==='Genérico');
     if (item.brand && rows.length) {
