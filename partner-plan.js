@@ -3,6 +3,7 @@ import { inventoryConfig } from './branch-inventory.js';
 import { crossRetailerPlans } from './pickup-plans.js';
 import { fixedStoreSource, quoteLocalOptions } from './compare.js';
 import { resolveMedication } from 'drogasil-cli';
+import { matchesRetailBrandLine } from 'drogasil-cli/medication-catalog';
 import { retailerComparison, retailerBasket } from 'drogasil-cli/retailer-workflows';
 
 const words = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu,'')
@@ -18,7 +19,7 @@ export function matchesRequestedBrand(product,requested) {
         (words(product.requestedReferenceTitle)+' ').startsWith(family+' ')) return true;
   }
   if (!brand || !family) return false;
-  if (brand === family) return true;
+  if (brand === family || matchesRetailBrandLine(product,requested)) return true;
   // The family must name this retailer-declared brand and appear verbatim
   // in the title. A competitor mentioning the same line cannot qualify.
   return (' '+family+' ').includes(' '+brand+' ') && (' '+words(product.name)+' ').includes(' '+family+' ');

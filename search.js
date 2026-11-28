@@ -1,4 +1,4 @@
-import { medicationIntent, verifiedRow } from 'drogasil-cli/medication-catalog';
+import { matchesRetailBrandLine, medicationIntent, verifiedRow } from 'drogasil-cli/medication-catalog';
 import { catalogQuery, consistentPackCount, documentedSublingual, normalizeSublingual, presentationSearchTerms, requestsSublingual } from 'drogasil-cli/retailer-workflows';
 
 const fold = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
@@ -30,7 +30,8 @@ export function prepareSearch(query) {
     // Require a whole name token in an identity field. A description or indication
     // can mention a completely different medication.
     const first = requested[0];
-    if (title[0] !== first && !brand.includes(first) && !ingredients.includes(first)) return false;
+    if (title[0] !== first && !brand.includes(first) && !ingredients.includes(first) &&
+        !matchesRetailBrandLine(row,cleaned)) return false;
     const titleDoses = title.filter(isDose);
     const doseEvidence = titleDoses.length ? titleDoses : words(facts.Dosagem);
     if (!strengths.every(strength => doseEvidence.includes(strength))) return false;
