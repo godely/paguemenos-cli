@@ -56,6 +56,11 @@ test('both retailers clarify a missing brand, then quote only the locally verifi
     assert.deepEqual(lookups,[genericCode]);
     assert.deepEqual(quotes,[['42',origin,2]]);
     assert.deepEqual(selected.products.map(p=>[p.name,p.currentPrice,p.branchQuantity]),[[genericName,9,null]]);
+    const missing = await quoteShoppingList(retailer,{...source,byGtin:async()=>[]},[{...item,query:names[1]}],origin);
+    assert.equal(missing.tables[0].status,'no_match');
+    assert.deepEqual(missing.tables[0].requestedBrand,{name:'Exemplo',status:'no_exact_catalog_match'});
+    assert.deepEqual(missing.tables[0].choices,[]);
+    assert.equal(quotes.length,1);
   }
 });
 
