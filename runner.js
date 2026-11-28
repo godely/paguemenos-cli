@@ -1,4 +1,4 @@
-import {describePickupStop, describePlanDifference} from './pickup-plans.js';
+import {describeUnfilled, describePickupStop, describePlanDifference} from './pickup-plans.js';
 import {hasPickupOffer} from './branch-shopping.js';
 import { confirmCliNames } from 'drogasil-cli/cli-name-confirmation';
 import { planShoppingList, shoppingItems } from './partner-plan.js';
@@ -119,10 +119,13 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     }
     if(!v.json && result.fixedStore) printFixedStore(result.fixedStore);
     if(v.json) console.log(JSON.stringify(result,null,2));
-    else if (result.pickupPlans?.plans.length) {
+    else if (result.pickupPlans?.plans.length || result.pickupPlans?.partialBasket) {
+      const partial = result.pickupPlans.partialBasket;
+      const itinerary = partial ?? result.pickupPlans;
+      if (partial) console.log('Cesta parcial. Itens confirmados: '+partial.filledCount+' de '+partial.requestedCount+'.');
       const titles={both:'Menos lojas e menor preço estimado',fewest_stores:'Menos lojas',lowest_price:'Menor preço estimado'};
       const money=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'});
-      for (const plan of result.pickupPlans.plans) {
+      for (const plan of itinerary.plans) {
         const total=plan.totalBRL == null ? 'total a confirmar' : money.format(plan.totalBRL);
         const distance=plan.roundTripKm == null ? 'distância a confirmar' : plan.roundTripKm.toFixed(2)+' km de ida e volta em linha reta';
         console.log(titles[plan.objective]+' · '+total+' · '+distance);
@@ -130,10 +133,12 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
           console.log((i+1)+'. '+describePickupStop(stop));
           for (const p of stop.pickups) console.log('   '+p.packs+' × '+p.name);
         }
+        for (const line of plan.unfilled ?? []) console.log('Pendente: '+describeUnfilled(line));
       }
-      const difference=result.pickupPlans.comparison;
+      for (const line of partial?.unfilled ?? []) console.log('Pendente: '+describeUnfilled(line));
+      const difference=itinerary.comparison;
       if (difference) console.log(describePlanDifference(difference));
-      console.log('Retirada confirmada para a quantidade pedida. Frete e taxas à parte.');
+      if (itinerary.plans.length) console.log('Subtotal dos itens listados. Frete e taxas à parte.');
       if (result.pickupPlans.searchLimited || result.pickupPlans.lookupFailures.length) console.log('Comparação parcial entre as opções verificadas.');
     }
     else if (result.planningScope === 'one_pack_alternatives') {

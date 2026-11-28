@@ -102,6 +102,7 @@ async function collectPartnerBlocks(result, items, quoteSubset) {
   const indices = items.map((_,i) => i);
   const blocks = partnerBlocks(result,id,indices,items);
   const failures = [];
+  const singleOutcomes = new Map();
   let jointChecks = 0, combinations = 0, limited = false;
   const fixedCache = new Map();
 
@@ -176,6 +177,15 @@ async function collectPartnerBlocks(result, items, quoteSubset) {
     if (!quoteCache.has(key)) quoteCache.set(key,quoteSubset(id,subset));
     try {
       const quote = await quoteCache.get(key);
+      if (subset.length === 1) {
+        const rows = quote.products ?? quote.items ?? [];
+        if (rows.length && rows.every(p => ['available','unavailable'].includes(p.localStatus) &&
+            p.requestedQuantity === (items[subset[0]].quantity ?? 1)) &&
+            !quote.unverified?.length && !['partial','source_failed'].includes(quote.quoteStatus) &&
+            rows.every(p => p.localStatus === 'unavailable' || !pickupMethods(p).length)) {
+          singleOutcomes.set(subset[0],'pickup_not_offered');
+        }
+      }
       if (['source_failed','unconfirmed','unverified','unresolved_items'].includes(quote.status)) failures.push(subset);
       blocks.push(...partnerBlocks(quote,id,subset,items));
       await checkCombinations(subset,quote);
@@ -191,7 +201,7 @@ async function collectPartnerBlocks(result, items, quoteSubset) {
     }
   }
   for (const i of available.slice(0,12)) await check([i]);
-  return {blocks, failures, limited};
+  return {blocks, failures, limited, singleOutcomes};
 }
 
 function bestPlans(blocks, count) {
@@ -199,10 +209,12 @@ function bestPlans(blocks, count) {
   const stores = new Map(), coordinates = new Map();
   const tour = routeFinder(stores,coordinates);
   const byItem = Array.from({length:count},() => []);
+  const reachable = new Set();
   for (const stops of blocks) {
     const picks = stops.flatMap(s => s.pickups);
     const indices = picks.map(p => p.item);
     if (!indices.length || new Set(indices).size !== indices.length || indices.some(i => i < 0 || i >= count)) continue;
+    indices.forEach(i => reachable.add(i));
     const prices = picks.map(p => cents(p.unitPriceBRL));
     const cost = prices.includes(null) ? Infinity : prices.reduce((sum,price,i) => sum + price * picks[i].packs,0);
     for (const stop of stops) {
@@ -216,43 +228,54 @@ function bestPlans(blocks, count) {
     const entry = {stops, indices, keys:stops.map(keyOf), cost};
     byItem[Math.min(...indices)].push(entry);
   }
-  let fewest, cheapest, nodes = 0, limited = false;
+  let fewest, cheapest, covered = 0, nodes = 0, limited = false;
   const ordered = (a,b) => {
     for (let i=0; i<a.length; i++) if (a[i] !== b[i]) return a[i] < b[i];
     return false;
   };
+  let allowPartial = false;
   const deadline = performance.now() + 2000;
   const usedItems = new Set(), usedStops = new Set(), quotedStops = new Set(), selected = [];
-  function visit(i,cost) {
-    if (++nodes > 50000 || (nodes % 64 === 0 && performance.now() > deadline)) { limited = true; return; }
-    while (usedItems.has(i)) i++;
-    if (i === count) {
-      const visits = new Map(), stockUsed = new Map();
-      for (const block of selected) for (const stop of block.stops) {
-        const key = keyOf(stop);
-        if (!visits.has(key)) visits.set(key,{...stop,pickups:[]});
-        for (const p of stop.pickups) {
-          if (p.evidence === 'reported_branch_stock') {
-            const inventoryKey = key + ':' + p.sku;
-            const needed = (stockUsed.get(inventoryKey) ?? 0) + p.packs;
-            if (!Number.isFinite(p.reportedStock) || needed > p.reportedStock) return;
-            stockUsed.set(inventoryKey,needed);
-          }
-          visits.get(key).pickups.push(p);
+  function consider(selected,cost,filled) {
+    if (filled < covered) return;
+    if (!filled) return;
+    const visits = new Map(), stockUsed = new Map();
+    for (const block of selected) for (const stop of block.stops) {
+      const key = keyOf(stop);
+      if (!visits.has(key)) visits.set(key,{...stop,pickups:[]});
+      for (const p of stop.pickups) {
+        if (p.evidence === 'reported_branch_stock') {
+          const inventoryKey = key + ':' + p.sku;
+          const previous = stockUsed.get(inventoryKey);
+          const needed = (previous?.needed ?? 0) + p.packs;
+          const available = Math.min(previous?.available ?? Infinity,p.reportedStock);
+          if (!Number.isFinite(p.reportedStock) || needed > available) return;
+          stockUsed.set(inventoryKey,{needed,available});
         }
+        visits.get(key).pickups.push(p);
       }
-      if (fewest && cheapest && visits.size > fewest.plan.stopCount && cost > cheapest.rank[0]) return;
-      const route = tour(visits.keys());
-      const stops = route.ids.map(id => visits.get(id));
-      const distance = route.km ?? Infinity;
-      const proximity = stops.reduce((sum,s) => sum + finiteDistance(s),0);
-      const fewRank = [stops.length,distance,cost,proximity], priceRank = [cost,stops.length,distance,proximity];
-      const plan = {stopCount:stops.length,roundTripKm:route.km,routeExactAmongChosenStops:route.exact,
-        totalBRL:Number.isFinite(cost) ? cost/100 : null,stops};
-      if (!fewest || ordered(fewRank,fewest.rank)) fewest = {rank:fewRank,plan};
-      if (Number.isFinite(cost) && (!cheapest || ordered(priceRank,cheapest.rank))) cheapest = {rank:priceRank,plan};
-      return;
     }
+    if (filled > covered) {
+      covered = filled;
+      fewest = undefined;
+      cheapest = undefined;
+    }
+    if (fewest && cheapest && visits.size > fewest.plan.stopCount && cost > cheapest.rank[0]) return;
+    const route = tour(visits.keys());
+    const stops = route.ids.map(id => visits.get(id));
+    const distance = route.km ?? Infinity;
+    const proximity = stops.reduce((sum,s) => sum + finiteDistance(s),0);
+    const fewRank = [stops.length,distance,cost,proximity], priceRank = [cost,stops.length,distance,proximity];
+    const plan = {stopCount:stops.length,roundTripKm:route.km,routeExactAmongChosenStops:route.exact,
+      totalBRL:Number.isFinite(cost) ? cost/100 : null,stops};
+    if (!fewest || ordered(fewRank,fewest.rank)) fewest = {rank:fewRank,plan};
+    if (Number.isFinite(cost) && (!cheapest || ordered(priceRank,cheapest.rank))) cheapest = {rank:priceRank,plan};
+  }
+  function visit(i,cost,skipped) {
+    if (reachable.size - skipped < covered) return;
+    if (++nodes > 50000 || (nodes % 64 === 0 && performance.now() > deadline)) { limited = true; return; }
+    while (i < count && (usedItems.has(i) || !reachable.has(i))) i++;
+    if (i === count) return consider(selected,cost,usedItems.size);
     for (const block of byItem[i]) {
       if (limited) break;
       if (block.indices.some(j => usedItems.has(j))) continue;
@@ -263,15 +286,28 @@ function bestPlans(blocks, count) {
       const added = block.keys.filter(k => !usedStops.has(k));
       added.forEach(k => usedStops.add(k));
       selected.push(block);
-      visit(i+1,cost+block.cost);
+      visit(i+1,cost+block.cost,skipped);
       selected.pop();
       block.indices.forEach(j => usedItems.delete(j));
       added.forEach(k => usedStops.delete(k));
       quoted.forEach(k => quotedStops.delete(k));
     }
+    // A branch may fulfill later items even when this line is missing or
+    // incompatible with a joint quote. A complete result prunes every skip.
+    if (allowPartial && !limited && reachable.size - skipped > covered) visit(i+1,cost,skipped+1);
   }
-  visit(0,0);
-  return {fewest:fewest?.plan, cheapest:cheapest?.plan, limited};
+  // Prioritize complete itineraries within the search budget.
+  if (reachable.size === count) visit(0,0,0);
+  if (!fewest && !limited && reachable.size) {
+    allowPartial = true;
+    visit(0,0,0);
+  }
+  // If the exhaustive search timed out before finding a complete cover, each
+  // existing block still provides a candidate that can be checked on its own.
+  if (limited && !fewest) {
+    for (const entries of byItem) for (const block of entries) consider([block],block.cost,block.indices.length);
+  }
+  return {covered, fewest:fewest?.plan, cheapest:cheapest?.plan, limited};
 }
 
 export async function crossRetailerPlans(results, items, quoteSubset) {
@@ -288,24 +324,80 @@ export async function crossRetailerPlans(results, items, quoteSubset) {
     }
     return report;
   }));
-  const overall = summarizePlans(reports,results,items.length);
+  const overall = summarizePlans(reports,results,items);
   if (results.length > 1) overall.byRetailer = Object.fromEntries(results.flatMap((r,j) =>
-    r.retailerId === 'drogasil' ? [] : [[r.retailerId,summarizePlans([reports[j]],[r],items.length)]]));
+    r.retailerId === 'drogasil' ? [] : [[r.retailerId,summarizePlans([reports[j]],[r],items)]]));
   return overall;
 }
 
-function summarizePlans(reports,results,count) {
-  const {fewest,cheapest,limited} = bestPlans(reports.flatMap(r => r.blocks),count);
+const reasonText = {
+  catalog_miss:'apresentação não encontrada no catálogo consultado',
+  reference_missing:'sem referência para identificar essa apresentação',
+  presentation_choice:'é preciso escolher a apresentação ou o fabricante',
+  catalog_failed:'falha na consulta ao catálogo',
+  lookup_failed:'falha na consulta à rede',
+  stock_failed:'falha na consulta ao estoque',
+  stock_unknown:'quantidade na filial a confirmar',
+  insufficient_stock:'as filiais consultadas não informaram estoque suficiente',
+  pickup_not_offered:'o site não ofereceu retirada da quantidade pedida',
+  joint_unconfirmed:'há uma opção individual, mas a combinação com as demais retiradas ficou sem confirmação',
+  pickup_unknown:'retirada a confirmar',
+};
+
+export function describeUnfilled(line) {
+  const retailers = {drogasil:'Drogasil',paguemenos:'Pague Menos',drogariasaopaulo:'Drogaria São Paulo'};
+  return line.name + ' — ' + line.outcomes.map(({retailerId,reason}) =>
+    retailers[retailerId] + ' (' + reasonText[reason] + ')').join(', ') + '.';
+}
+
+function lineOutcome(result,report,i) {
+  const checkout = result.checkout ?? result;
+  const physical = result.checkout ? result : result.purchase ?? result;
+  const catalog = checkout.tables?.[i];
+  const stock = physical.tables?.[i];
+  const status = catalog?.status ?? stock?.status;
+  if (report.blocks.some(stops => stops.some(s => s.pickups.some(p => p.item === i)))) return 'joint_unconfirmed';
+  if (catalog?.needsSelection || stock?.needsSelection || ['ambiguous','choose_manufacturer','choose_reference','presentation_options','conflicting_release'].includes(status)) return 'presentation_choice';
+  if (status === 'catalog_lookup_failed' || status === 'source_failed') return 'catalog_failed';
+  if (['no_match','requested_brand_not_found','preference_unavailable','selected_presentation_unverified'].includes(status)) return 'catalog_miss';
+  if (status === 'no_reference') return 'reference_missing';
+  if (status === 'partial' && !catalog?.choices?.length) return 'catalog_failed';
+  if (stock?.failed?.length) return 'stock_failed';
+  if (checkout.status === 'source_failed' || report.failures.some(indices => indices.length === 1 && indices[0] === i)) return 'lookup_failed';
+  if (stock?.unknown?.length) return 'stock_unknown';
+  if (stock?.unavailable?.length && !stock.rows?.length) return 'insufficient_stock';
+  return report.singleOutcomes?.get(i) ?? 'pickup_unknown';
+}
+
+function summarizePlans(reports,results,items) {
+  const {fewest,cheapest,covered,limited} = bestPlans(reports.flatMap(r => r.blocks),items.length);
+  const partial = covered < items.length;
+  const pending = partial ? items.map((item,i) => ({
+    item:i, name:/^\d+$/.test(item.query) ? 'Item '+(i+1) : item.query,
+    outcomes:results.map((result,j) => ({retailerId:result.retailerId,reason:lineOutcome(result,reports[j],i)})),
+  })) : [];
   const plans = [];
-  if (fewest) plans.push({...fewest,objective:fewest === cheapest ? 'both' : 'fewest_stores'});
-  if (cheapest && cheapest !== fewest) plans.push({...cheapest,objective:'lowest_price'});
-  const comparison = cheapest && fewest?.totalBRL != null && fewest !== cheapest ? {
+  function add(plan,objective) {
+    const entry = {...plan,objective};
+    if (partial) {
+      const filled = new Set(plan.stops.flatMap(stop => stop.pickups.map(p => p.item)));
+      entry.unfilled = pending.filter(line => !filled.has(line.item));
+    }
+    plans.push(entry);
+  }
+  if (fewest) add(fewest,fewest === cheapest ? 'both' : 'fewest_stores');
+  if (cheapest && cheapest !== fewest) add(cheapest,'lowest_price');
+  const sameLines = !partial || (plans.length === 2 && plans[0].unfilled.every((line,i) => line.item === plans[1].unfilled[i].item));
+  const comparison = sameLines && cheapest && fewest?.totalBRL != null && fewest !== cheapest ? {
     savingsBRL:(cents(fewest.totalBRL)-cents(cheapest.totalBRL))/100,
     extraStops:cheapest.stopCount-fewest.stopCount,
     extraKm:cheapest.roundTripKm == null || fewest.roundTripKm == null ? null : cheapest.roundTripKm-fewest.roundTripKm,
   } : null;
-  return {status:plans.length ? 'complete' : 'no_complete_plan_verified',
-    scope:'verified_pickup_and_branch_plans',distanceBasis:'straight_line_round_trip',feesIncluded:false, plans, comparison,
+  return {status:fewest && !partial ? 'complete' : 'no_complete_plan_verified',
+    scope:'verified_pickup_and_branch_plans',distanceBasis:'straight_line_round_trip',feesIncluded:false,
+    plans:partial ? [] : plans, comparison:partial ? null : comparison,
+    ...(partial && {partialBasket:{filledCount:covered,requestedCount:items.length,plans,comparison,
+      ...(covered === 0 && {unfilled:pending})}}),
     lookupFailures:reports.flatMap((r,j) => r.failures.map(itemIndices => ({retailerId:results[j].retailerId,itemIndices}))),
     searchLimited:limited || reports.some(r => r.limited)};
 }
