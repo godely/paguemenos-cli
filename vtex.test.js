@@ -1,6 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRetailer, validGtin } from './vtex.js';
+test('keeps the source page, category and online signal attached to each seller', async () => {
+  const product = { categories: ['/Saúde/Higiene/', '/Saúde/'], items: [{itemId:'12', sellers:[
+    {sellerId:'a', sellerDefault:false, commertialOffer:{IsAvailable:true, AvailableQuantity:10000}},
+    {sellerId:'b', sellerDefault:true, commertialOffer:{IsAvailable:false, AvailableQuantity:0}},
+    {sellerId:'c', commertialOffer:{}},
+  ]}] };
+  const urls = [];
+  const source = createRetailer({name:'Example', site:'https://example.org'}, async url => {
+    urls.push(url.href);
+    return Response.json([product]);
+  });
+  for (const rows of [await source.search('higiene', 2, 4), await source.product('12')]) {
+    assert.deepEqual(rows.map(r => [r.isDefaultSeller, r.onlineStockSignal]), [[false,10000], [true,0], [null,null]]);
+    assert.ok(rows.every(r => r.sourceUrl === urls[0] && r.observedAt === rows[0].observedAt));
+    assert.deepEqual(rows[0].categoryPaths, product.categories);
+    urls.shift();
+  }
+});
+
 test('large user pages span bounded source pages and preserve all sellers for each product', async () => {
   const windows=[];
   const source=createRetailer({name:'Example',site:'https://example.com'},async url=>{

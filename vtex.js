@@ -27,16 +27,18 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
     const query = new URLSearchParams({
       ...params, _from: String(start), _to: String(start + limit - 1),
     }).toString().replaceAll('+', '%20');
-    const response = await getResponse('/api/catalog_system/pub/products/search?' + query);
+    const path = '/api/catalog_system/pub/products/search?' + query;
+    const response = await getResponse(path);
     const data = await response.json();
     if (!Array.isArray(data)) throw new Error('Unexpected catalog response');
     const range = /^(\d+)-\d+\/(\d+)$/.exec(response.headers.get('resources') ?? '');
     if (range && Number(range[1]) !== start) throw new Error('Unexpected catalog result range');
     const finished = data.length < limit || (range !== null && start + data.length >= Number(range[2]));
-    return { products: data, finished };
+    return { products: data, finished, sourceUrl: new URL(path, site).href, observedAt: new Date().toISOString() };
   }
 
-  function offers(product) {
+  function offers(product, page) {
+    const categoryPaths = (product.categories ?? []).filter(path => typeof path === 'string');
     return product.items.flatMap(item => item.sellers.map(seller => {
       const offer = seller.commertialOffer ?? {};
       const facts = Object.fromEntries((product.allSpecifications ?? []).map(key => [key, product[key]]));
@@ -44,13 +46,15 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
         name: item.nameComplete || item.name, itemName: item.name, brand: product.brand, productUrl: product.link,
         sellerId: String(seller.sellerId), seller: seller.sellerName, currency: 'BRL', currentPrice: offer.IsAvailable === false && offer.Price === 0 ? null : price(offer.Price),
         listPrice: offer.IsAvailable === false && offer.ListPrice === 0 ? null : price(offer.ListPrice), inStock: typeof offer.IsAvailable === 'boolean' ? offer.IsAvailable : null,
-        priceScope: 'anonymous_online', observedAt: new Date().toISOString(), facts };
+        isDefaultSeller: typeof seller.sellerDefault === 'boolean' ? seller.sellerDefault : null,
+        onlineStockSignal: Number.isSafeInteger(offer.AvailableQuantity) && offer.AvailableQuantity >= 0 ? offer.AvailableQuantity : null,
+        categoryPaths, sourceUrl: page.sourceUrl, priceScope: 'anonymous_online', observedAt: page.observedAt, facts };
     }));
   }
 
   async function catalog(params, page = 1, limit = 20) {
-    const { products } = await catalogPage(params, page, limit);
-    return products.flatMap(offers);
+    const catalog = await catalogPage(params, page, limit);
+    return catalog.products.flatMap(product => offers(product, catalog));
   }
 
   async function search(query, page = 1, limit = 20) {
@@ -61,15 +65,15 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
     const rows = [];
     let matched = 0;
     for (let sourcePage = 1; ; sourcePage++) {
-      const { products, finished } = await catalogPage({ ft: text }, sourcePage, 50);
-      for (const product of products) {
-        const accepted = offers(product).filter(matches);
+      const catalog = await catalogPage({ ft: text }, sourcePage, 50);
+      for (const product of catalog.products) {
+        const accepted = offers(product, catalog).filter(matches);
         if (!accepted.length) continue;
         if (matched >= start) rows.push(...accepted);
         matched++;
         if (matched - start === limit) return rows;
       }
-      if (finished) return rows;
+      if (catalog.finished) return rows;
     }
   }
 
