@@ -136,7 +136,7 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     if (v.json) console.log(JSON.stringify(data,null,2));
     else for (const result of data.results) {
       console.log(result.query, result.status);
-      console.table(result.products.map(p=>({name:p.name, strengths:p.strengths.join(', '),forms:p.forms.join(', '),prescription:p.prescriptionLabel.join(', ')||'não confirmado',retention:p.retentionLabel.join(', ')||'não confirmado',source:p.source})));
+      console.table(result.products.map(p=>({name:p.name, strengths:p.strengths.join(', '),forms:p.forms.join(', '),prescription:p.prescriptionLabel.join(', ')||'não confirmado',retention:p.prescription.retained === null ? (p.retentionLabel.join(', ')||'não confirmado') : p.prescription.retained ? 'Sim' : 'Não',receituário:p.prescription.form||'não confirmado',norma:p.prescription.rule,source:p.source})));
       if(v.brazil) console.log(JSON.stringify(result.brazil??{status:'não confirmado'},null,2));
     }
     if(data.results.some(r=>['source_failed','partial'].includes(r.status)||r.nationalStatus==='source_failed')) process.exitCode=2;
