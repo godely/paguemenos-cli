@@ -6,6 +6,37 @@ import {routeFinder} from 'drogasil-cli';
 const cents = value => Number.isFinite(value) && value >= 0 ? Math.round(value * 100) : null;
 const finiteDistance = stop => Number.isFinite(stop.distanceKm) ? stop.distanceKm : Infinity;
 
+const money = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'});
+const kilometers = new Intl.NumberFormat('pt-BR', {maximumFractionDigits:2});
+
+export function describePlanDifference({savingsBRL, extraStops, extraKm}) {
+  const stops = extraStops === 0 ? 'o mesmo número de paradas' :
+    extraStops + (extraStops === 1 ? ' parada a mais' : ' paradas a mais');
+  let distance = 'diferença de distância a confirmar';
+  if (Number.isFinite(extraKm)) {
+    const meters = Math.round(Math.abs(extraKm) * 1000);
+    if (meters === 0) distance = 'a mesma distância estimada de ida e volta';
+    else {
+      const magnitude = meters < 1000 ? meters + ' m' : kilometers.format(meters / 1000) + ' km';
+      distance = magnitude + (extraKm > 0 ? ' a mais' : ' a menos') + ' de ida e volta em linha reta';
+    }
+  }
+  return 'Economia de ' + money.format(savingsBRL) + ' no total estimado, com ' + stops + ' e ' + distance + '.';
+}
+
+export function describePickupStop(stop) {
+  const a = stop.address ?? {};
+  const street = a.street ?? a.addressLocal;
+  const number = a.number ?? a.addressNumber;
+  const address = [street, number].filter(part => part != null && part !== '').join(', ');
+  const name = stop.name?.trim().replace(/\s+[-–—]$/, '') || '';
+  if (!name || !address) return name || address;
+  const normalize = text => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  if ((' ' + normalize(name) + ' ').includes(' ' + normalize(address) + ' ')) return name;
+  return name + ' — ' + address;
+}
+
 function stockBlocks(result, items) {
   const blocks = [];
   for (const plan of result.plans ?? []) {

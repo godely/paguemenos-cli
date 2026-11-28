@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {run} from './runner.js';
-import {crossRetailerPlans} from './pickup-plans.js';
+import {crossRetailerPlans, describePlanDifference, describePickupStop} from './pickup-plans.js';
 
 const method = id=>({channel:'pickup-in-point',pickupPointId:id,branch:id,distanceKm:1});
 
@@ -78,4 +78,22 @@ test('checks exact combinations of eligible products with their sellers and chec
   assert.equal(checked.length,4);
   assert.deepEqual(plans.plans.map(p=>[p.stopCount,p.totalBRL]),[[1,12],[2,6]]);
   assert.deepEqual(plans.plans[0].stops[0].pickups.map(p=>p.sku),['12','22']);
+});
+
+test('shopper tradeoff distinguishes longer, shorter, equal and unknown round trips', () => {
+  const describe = (extraKm, extraStops=1) => describePlanDifference({savingsBRL:8.4,extraStops,extraKm});
+  assert.match(describe(1.2), /8,40.*1 parada a mais.*1,2 km a mais.*linha reta/);
+  assert.match(describe(-0.24, 2), /2 paradas a mais.*240 m a menos/);
+  assert.match(describe(0, 0), /mesmo número de paradas.*mesma distância/);
+  assert.match(describe(null), /diferença de distância a confirmar/);
+});
+
+test('pickup stop keeps a branch name and its address without duplicating a street in the name', () => {
+  const address={street:'Rua da Pracinha',number:7};
+  assert.equal(describePickupStop({name:'Filial Praça -',address}),'Filial Praça — Rua da Pracinha, 7');
+  const name='Pague Menos - Rua da Pracinha, 7 (Loja 1)';
+  assert.equal(describePickupStop({name,address}),name);
+  assert.equal(describePickupStop({name:'Loja da Praça'}),'Loja da Praça');
+  assert.equal(describePickupStop({address:{addressLocal:'Avenida Um',addressNumber:'2'}}),'Avenida Um, 2');
+  assert.match(describePickupStop({name:'Rua da Pracinha 71',address}), /71 — Rua da Pracinha, 7$/);
 });
