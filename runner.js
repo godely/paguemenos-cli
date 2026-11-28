@@ -1,3 +1,4 @@
+import {describePickupStop, describePlanDifference} from './pickup-plans.js';
 import {hasPickupOffer} from './branch-shopping.js';
 import { confirmCliNames } from 'drogasil-cli/cli-name-confirmation';
 import { planShoppingList, shoppingItems } from './partner-plan.js';
@@ -121,13 +122,12 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
         const distance=plan.roundTripKm == null ? 'distância a confirmar' : plan.roundTripKm.toFixed(2)+' km de ida e volta em linha reta';
         console.log(titles[plan.objective]+' · '+total+' · '+distance);
         for (const [i,stop] of plan.stops.entries()) {
-          const address=[stop.address?.street,stop.address?.number].filter(Boolean).join(', ');
-          console.log((i+1)+'. '+[stop.name,address].filter(Boolean).join(' — '));
+          console.log((i+1)+'. '+describePickupStop(stop));
           for (const p of stop.pickups) console.log('   '+p.packs+' × '+p.name);
         }
       }
       const difference=result.pickupPlans.comparison;
-      if (difference) console.log('Economia estimada de '+money.format(difference.savingsBRL)+' com '+difference.extraStops+' parada(s) a mais.');
+      if (difference) console.log(describePlanDifference(difference));
       console.log('Retirada confirmada para a quantidade pedida. Frete e taxas à parte.');
       if (result.pickupPlans.searchLimited || result.pickupPlans.lookupFailures.length) console.log('Comparação parcial entre as opções verificadas.');
     }
