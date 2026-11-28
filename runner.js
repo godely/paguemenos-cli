@@ -126,8 +126,8 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
   }
   if (command==='info') {
     // Preserve the original SKU-only response for existing callers.
-    if (words.length===1 && /^\d+$/.test(words[0]) && !v.brazil) {
-      const rows=await source.product(words[0]);
+    if (v.json && words.length===1 && /^\d+$/.test(words[0]) && !v.brazil) {
+      const rows=await source.facts(words[0]);
       console.log(JSON.stringify(rows,null,2));
       if(!rows.length) process.exitCode=3;
       return;
@@ -139,7 +139,7 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
       console.table(result.products.map(p=>({name:p.name, strengths:p.strengths.join(', '),forms:p.forms.join(', '),prescription:p.prescriptionLabel.join(', ')||'não confirmado',retention:p.retentionLabel.join(', ')||'não confirmado',source:p.source})));
       if(v.brazil) console.log(JSON.stringify(result.brazil??{status:'não confirmado'},null,2));
     }
-    if(data.results.some(r=>r.status==='source_failed'||r.nationalStatus==='source_failed')) process.exitCode=2;
+    if(data.results.some(r=>['source_failed','partial'].includes(r.status)||r.nationalStatus==='source_failed')) process.exitCode=2;
     else if(data.results.some(r=>r.status!=='matches' && !r.brazil?.presentations?.length)) process.exitCode=3;
     return;
   }

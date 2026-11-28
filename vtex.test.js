@@ -94,3 +94,19 @@ test('a single fulfillment simulation aggregates repeat SKUs and uses only match
   assert.equal(got[1].currentPrice,5.05);
   assert.equal(got[1].methods[0].pickupPointId,'B');
 });
+
+test('catalog facts work without sellers, quotes or location', async () => {
+  const item = {itemId:'12', name:'Marca solução 60 mL', ean:'7899547543766'};
+  const calls = [];
+  const retailer = createRetailer({name:'Example',site:'https://example.test'}, async url => {
+    assert.equal(url.pathname,'/api/catalog_system/pub/products/search');
+    calls.push(url.searchParams.get('fq') ?? url.searchParams.get('ft'));
+    return Response.json([{items:[item],allSpecifications:['Apresentação'],Apresentação:['Em solução']}]);
+  });
+  for (const rows of [await retailer.facts('Marca'),await retailer.facts('12'),await retailer.factsByGtin(item.ean)]) {
+    assert.deepEqual(rows.map(row => row.sku),['12']);
+    assert.deepEqual(rows[0].facts.Apresentação,['Em solução']);
+    for(const field of ['currentPrice','listPrice','inStock','onlineStockSignal','sellerId']) assert.ok(!(field in rows[0]));
+  }
+  assert.deepEqual(calls,['Marca','skuId:12','alternateIds_Ean:' + item.ean]);
+});
