@@ -64,3 +64,13 @@ test('a shopper can say the brand and product line together',()=>{
   for(const name of ['Mar','Linha Plus','Marca Linha Forte','Outra Marca']) assert.equal(matchesRequestedBrand(p,name),false);
   assert.equal(matchesRequestedBrand({...p,brand:'Outra'},'Marca Linha'),false);
 });
+
+test('a retailer that labels the manufacturer can use the verified title of the identical pack',()=>{
+  const product={role:'requested',name:'Patz solução gotas 20 ml',brand:'EMS',requestedTradeName:'Patz',
+    requestedReferenceTitle:'PATZ GTS Hemitartarato de Zolpidem 10mg/ml Solução Gotas 20ml',
+    matchBasis:'verified_drop_presentation_and_barcode'};
+  assert.ok(matchesRequestedBrand(product,'Patz GTS'));
+  for (const name of ['Patz GT','Patz GTS XR','Outra GTS']) assert.equal(matchesRequestedBrand(product,name),false);
+  for (const change of [{role:'generic'},{matchBasis:'title'},{requestedReferenceTitle:'Outro Patz GTS'}])
+    assert.equal(matchesRequestedBrand({...product,...change},'Patz GTS'),false);
+});

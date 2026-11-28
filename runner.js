@@ -1,7 +1,7 @@
 import { confirmCliNames } from 'drogasil-cli/cli-name-confirmation';
 import { planShoppingList, shoppingItems } from './partner-plan.js';
 import { parseArgs } from 'node:util';
-import { retailerComparison, catalogInfo, catalogSnapshot, catalogType, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
+import { retailerComparison, catalogInfo, catalogSnapshot, catalogType, requestsDrops, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
 import { compareOffers } from './compare.js';
 import { checkoutOrigin, point } from './location.js';
 import { validGtin } from './vtex.js';
@@ -185,7 +185,7 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
   let rows;
   if(command==='search') {
     const page = Number(v.page ?? 1);
-    if (source.byGtin && /\S\s.*\bgotas?\b/iu.test(query)) {
+    if (source.byGtin && query.trim().includes(' ') && requestsDrops(query)) {
       const result = await retailerComparison({retailer:bin, query, includeGenerics:false}, source);
       rows = (result.candidates ?? result.products ?? []).slice((page - 1) * limit, page * limit);
     } else {

@@ -8,7 +8,12 @@ const words = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu,''
 
 export function matchesRequestedBrand(product,requested) {
   const brand = words(product.brand), family = words(requested);
-  if (family && product.role === 'requested' && words(product.requestedTradeName) === family) return true;
+  const trade = words(product.requestedTradeName);
+  if (trade && product.role === 'requested') {
+    if (trade === family) return true;
+    if (product.matchBasis === 'verified_drop_presentation_and_barcode' && family.startsWith(trade+' ') &&
+        (words(product.requestedReferenceTitle)+' ').startsWith(family+' ')) return true;
+  }
   if (!brand || !family) return false;
   if (brand === family) return true;
   // The family must name this retailer-declared brand and appear verbatim
