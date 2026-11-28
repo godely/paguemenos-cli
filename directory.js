@@ -11,7 +11,7 @@ function phone(area, local) {
   return /^\d{2}$/.test(String(area).trim()) ? area + ' ' + String(local).trim() : String(local).trim();
 }
 
-export async function stores(origin, request = fetch) {
+async function directoryRows(origin, request) {
   const location = checkoutOrigin(origin);
   const route = location.postalCode
     ? 'get-store-base-by-address/' + location.postalCode
@@ -22,6 +22,17 @@ export async function stores(origin, request = fetch) {
   const data = await response.json();
   const rows = location.postalCode ? data : data.sortedStores;
   if (!Array.isArray(rows)) throw new Error('Unexpected Pague Menos store directory');
+  return rows;
+}
+
+function openingHours(row) {
+  const flag = String(row.horas_24 ?? '').trim().toUpperCase();
+  return {weekdays:row.seg_a_sex || null, saturday:row.sabado || null, sunday:row.domingo || null,
+    holidays:row.feriado || null, open24Hours:flag === 'SIM' ? true : ['NÃO','NAO'].includes(flag) ? false : null};
+}
+
+export async function stores(origin, request = fetch) {
+  const rows = await directoryRows(origin, request);
   const branches = new Map();
   for (const row of rows) {
     const id = String(row.cod_loja ?? '').trim();
@@ -34,11 +45,52 @@ export async function stores(origin, request = fetch) {
     branches.set(id, {
       id, storeName: row.nome_loja, distanceKm, status: status || null,
       phone: phone(row.ddd, row.fixo_loja) ?? phone(row.ddd, row.celular_loja),
-      hours: { weekdays: row.seg_a_sex || null, saturday: row.sabado || null,
-        sunday: row.domingo || null, holidays: row.feriado || null },
+      hours: openingHours(row),
       address: {street: row.endereco, district: row.bairro, city: row.cidade, state: row.uf, postalCode: row.cep,
         latitude: number(row.latitude_loja,-90,90), longitude: number(row.longitude,-180,180)},
     });
   }
   return [...branches.values()].sort((a,b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity) || a.id.localeCompare(b.id));
+}
+
+
+// A pickup offer can refer to another banner in the same retailer's directory.
+// Only enrich IDs actually offered by checkout. Cache public branch data, never the origin.
+export function lookupPickupStores(request = fetch) {
+  const cache = new Map();
+  return async (origin, pickupIds) => {
+    const result = new Map(), missing = new Map();
+    const now = Date.now();
+    for (const point of pickupIds) {
+      const id = /^paguemenos(\d+)_/i.exec(point)?.[1].replace(/^0+(?=\d)/, '');
+      if (!id) continue;
+      const hit = cache.get(id);
+      if (hit && hit.expires > now) result.set(point, hit.store);
+      else missing.set(point, id);
+    }
+    if (!missing.size) return result;
+    let rows;
+    try { rows = await directoryRows(origin, request); }
+    catch { return result; } // A locator outage cannot invalidate a checkout offer.
+    const byId = new Map();
+    for (const row of rows) {
+      const banner = row.bandeira?.trim().toUpperCase();
+      if (banner !== 'PAGUE MENOS' && banner !== 'EXTRAFARMA') continue;
+      const id = String(row.cod_loja ?? '').trim();
+      if (!id) continue;
+      const store = {id, directoryName:row.nome_loja || null, banner, address:row.endereco || null,
+        city:row.cidade || null, state:row.uf || null, hours:openingHours(row)};
+      // Duplicate IDs with different branch records cannot establish identity.
+      if (byId.has(id)) byId.set(id, null);
+      else byId.set(id, store);
+    }
+    for (const [point, id] of missing) {
+      const store = byId.get(id);
+      if (!store) continue;
+      result.set(point, store);
+      if (cache.size >= 512) cache.delete(cache.keys().next().value);
+      cache.set(id, {store, expires:now + 5 * 60_000});
+    }
+    return result;
+  };
 }

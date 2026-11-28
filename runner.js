@@ -156,7 +156,7 @@ export async function run(source, argv, bin) {
   if(command==='stores') {
     const stores=await source.stores(origin);
     if(v.json) console.log(JSON.stringify(stores,null,2));
-    else console.table(stores.map(s=>({id:s.id,name:s.storeName,address:s.address.street,city:s.address.city,lat:s.address.latitude,lon:s.address.longitude,km:s.distanceKm,phone:s.phone})));
+    else console.table(stores.map(s=>({id:s.id,name:s.storeName,address:s.address.street,city:s.address.city,lat:s.address.latitude,lon:s.address.longitude,km:s.distanceKm,phone:s.phone,...s.hours})));
     if(!stores.length) process.exitCode=3;
     return;
   }
@@ -227,7 +227,7 @@ function printQuotes(rows) {
   console.table(rows.map(row=>({
     SKU:row.sku, Medicamento:row.name, Tipo:row.type??catalogType(row), Preço:row.currentPrice,
     'Origem do preço':row.priceScope, Atendimento:row.localStatus,
-    'Qtd. solicitada':row.requestedQuantity, 'Retirada ofertada':row.methods?.filter(m=>m.channel==='pickup-in-point').map(m=>m.branch||m.pickupPointId).join(', ')||'—',
+    'Qtd. solicitada':row.requestedQuantity, 'Retirada ofertada':row.methods?.filter(m=>m.channel==='pickup-in-point').map(m=>[m.branch || m.pickupPointId, m.shippingEstimateDate || m.shippingEstimate].filter(Boolean).join(' · previsão: ')).join(', ')||'—',
   })));
 }
 
