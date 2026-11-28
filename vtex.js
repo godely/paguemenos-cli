@@ -37,19 +37,29 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
     return { products: data, finished, sourceUrl: new URL(path, site).href, observedAt: new Date().toISOString() };
   }
 
+  function catalogIdentity(product, item, page) {
+    const facts = Object.fromEntries((product.allSpecifications ?? []).map(key => [key, product[key]]));
+    return { retailer:name, sku:String(item.itemId), gtin:validGtin(String(item.ean)) ? String(item.ean) : null,
+      name:item.nameComplete || item.name, itemName:item.name, brand:product.brand, productUrl:product.link,
+      categoryPaths:(product.categories ?? []).filter(path => typeof path === 'string'),
+      sourceUrl:page.sourceUrl, observedAt:page.observedAt, facts };
+  }
+
   function offers(product, page) {
-    const categoryPaths = (product.categories ?? []).filter(path => typeof path === 'string');
     return product.items.flatMap(item => item.sellers.map(seller => {
       const offer = seller.commertialOffer ?? {};
-      const facts = Object.fromEntries((product.allSpecifications ?? []).map(key => [key, product[key]]));
-      return { retailer: name, sku: String(item.itemId), gtin: validGtin(String(item.ean)) ? String(item.ean) : null,
-        name: item.nameComplete || item.name, itemName: item.name, brand: product.brand, productUrl: product.link,
-        sellerId: String(seller.sellerId), seller: seller.sellerName, currency: 'BRL', currentPrice: offer.IsAvailable === false && offer.Price === 0 ? null : price(offer.Price),
-        listPrice: offer.IsAvailable === false && offer.ListPrice === 0 ? null : price(offer.ListPrice), inStock: typeof offer.IsAvailable === 'boolean' ? offer.IsAvailable : null,
+      return { ...catalogIdentity(product, item, page), sellerId:String(seller.sellerId), seller:seller.sellerName, currency:'BRL',
+        currentPrice: offer.IsAvailable === false && offer.Price === 0 ? null : price(offer.Price),
+        listPrice: offer.IsAvailable === false && offer.ListPrice === 0 ? null : price(offer.ListPrice),
+        inStock: typeof offer.IsAvailable === 'boolean' ? offer.IsAvailable : null,
         isDefaultSeller: typeof seller.sellerDefault === 'boolean' ? seller.sellerDefault : null,
         onlineStockSignal: Number.isSafeInteger(offer.AvailableQuantity) && offer.AvailableQuantity >= 0 ? offer.AvailableQuantity : null,
-        categoryPaths, sourceUrl: page.sourceUrl, priceScope: 'anonymous_online', observedAt: page.observedAt, facts };
+        priceScope:'anonymous_online' };
     }));
+  }
+
+  function identities(product, page) {
+    return product.items.map(item => catalogIdentity(product, item, page));
   }
 
   async function catalog(params, page = 1, limit = 20) {
@@ -57,9 +67,12 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
     return catalog.products.flatMap(product => offers(product, catalog));
   }
 
-  async function search(query, page = 1, limit = 20) {
+  async function search(query, page = 1, limit = 20, project = offers) {
     checkPage(page, limit, 1000);
-    if (!prepareSearch && limit<=50) return catalog({ ft: query }, page, limit);
+    if (!prepareSearch && limit<=50) {
+      const result = await catalogPage({ ft:query }, page, limit);
+      return result.products.flatMap(product => project(product, result));
+    }
     const { text, matches } = prepareSearch?.(query) ?? {text:query,matches:()=>true};
     const start = (page - 1) * limit;
     const rows = [];
@@ -67,7 +80,7 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
     for (let sourcePage = 1; ; sourcePage++) {
       const catalog = await catalogPage({ ft: text }, sourcePage, 50);
       for (const product of catalog.products) {
-        const accepted = offers(product, catalog).filter(matches);
+        const accepted = project(product, catalog).filter(matches);
         if (!accepted.length) continue;
         if (matched >= start) rows.push(...accepted);
         matched++;
@@ -77,6 +90,18 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
     }
   }
 
+  async function exactFacts(field, code) {
+    const result = await catalogPage({ fq:field + ':' + code }, 1, 50);
+    return result.products.flatMap(product => identities(product, result));
+  }
+  async function facts(query, page = 1, limit = 20) {
+    if (/^\d+$/.test(query)) return (await exactFacts('skuId', query)).filter(row => row.sku === query);
+    return search(query, page, limit, identities);
+  }
+  async function factsByGtin(code) {
+    if (!validGtin(code)) throw new TypeError('Expected a valid GTIN');
+    return (await exactFacts('alternateIds_Ean', code)).filter(row => row.gtin === code);
+  }
   async function byGtin(gtin) {
     if (!validGtin(gtin)) throw new TypeError('Expected a valid GTIN');
     return (await catalog({ fq: 'alternateIds_Ean:' + gtin })).filter(p => p.gtin === gtin);
@@ -114,7 +139,7 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
     const [result] = await basket([{offer,quantity}],zipcode);
     return result;
   }
-  return { name, site, search, product, byGtin, local, basket };
+  return { name, site, search, product, byGtin, facts, factsByGtin, local, basket };
 }
 
 function quoteLine(offer, quantity, data, verifiedScope) {
