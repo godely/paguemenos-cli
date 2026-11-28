@@ -1,4 +1,5 @@
 import { checkoutOrigin } from './location.js';
+import { fulfillmentTiming } from './fulfillment-timing.js';
 const cents = value => Number.isSafeInteger(value) && value >= 0 ? value / 100 : null;
 const price = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 
@@ -8,7 +9,7 @@ export function validGtin(code) {
   return digits.reduce((sum, n, i) => sum + n * (i % 2 ? 3 : 1), 0) % 10 === 0;
 }
 
-export function createRetailer({ name, site, prepareSearch }, request = fetch) {
+export function createRetailer({ name, site, prepareSearch, pickupStores }, request = fetch) {
   async function getResponse(path, options = {}) {
     const response = await request(new URL(path, site), { ...options, signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(name + ' HTTP ' + response.status);
@@ -108,7 +109,12 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
       }) });
     const data = await response.json();
     if (!Array.isArray(data.items) || !Array.isArray(data.logisticsInfo)) throw new Error('Unexpected simulation response');
-    return requested.map(({offer,quantity}) => quoteLine(offer,quantity,data, location.geoCoordinates ? 'verified_for_coordinates' : 'verified_for_cep'));
+    const points = new Map((Array.isArray(data.pickupPoints) ? data.pickupPoints : [])
+      .filter(p => typeof p?.id === 'string' && p.id).map(p => [p.id, p]));
+    const pickupIds = [...new Set(data.logisticsInfo.flatMap(l => (l?.slas ?? [])
+      .filter(s => s?.deliveryChannel === 'pickup-in-point' && s.pickupPointId).map(s => s.pickupPointId)))];
+    const branches = pickupStores && pickupIds.length ? await pickupStores(origin, pickupIds).catch(() => new Map()) : new Map();
+    return requested.map(({offer,quantity}) => quoteLine(offer,quantity,data, points, branches, location.geoCoordinates ? 'verified_for_coordinates' : 'verified_for_cep'));
   }
   async function local(offer, zipcode, quantity = 1) {
     const [result] = await basket([{offer,quantity}],zipcode);
@@ -117,13 +123,15 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
   return { name, site, search, product, byGtin, local, basket };
 }
 
-function quoteLine(offer, quantity, data, verifiedScope) {
+function quoteLine(offer, quantity, data, points, branches, verifiedScope) {
   const index = data.items.findIndex(i => String(i.id) === offer.sku && String(i.seller) === offer.sellerId);
   const item = data.items[index];
   const logistics = data.logisticsInfo.find(l => l.itemIndex === index && (l.itemId == null || String(l.itemId) === offer.sku));
   const slas = (logistics?.slas ?? []).filter(s => s && ['delivery', 'pickup-in-point'].includes(s.deliveryChannel));
   const verified = !!item && item.availability === 'available' && item.quantity >= quantity && slas.length > 0;
   const methods = slas.map(s => ({ channel: s.deliveryChannel, service: s.id, feeBRL: cents(s.price),
+    ...fulfillmentTiming(s, points.get(s.pickupPointId)),
+    ...(s.deliveryChannel === 'pickup-in-point' && branches.has(s.pickupPointId) && {directoryStore: branches.get(s.pickupPointId)}),
     pickupPointId: s.pickupPointId || null, branch: s.pickupStoreInfo?.friendlyName || null,
     distanceKm: Number.isFinite(s.pickupDistance) && s.pickupDistance >= 0 ? s.pickupDistance : null,
     address: s.pickupStoreInfo?.address || null }));
