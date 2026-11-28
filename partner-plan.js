@@ -2,6 +2,18 @@ import { quoteLocalOptions } from './compare.js';
 import { resolveMedication } from 'drogasil-cli';
 import { retailerComparison, retailerBasket } from 'drogasil-cli/retailer-workflows';
 
+const words = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu,'')
+  .toLowerCase().replace(/[^\p{L}0-9]+/gu,' ').trim();
+
+export function matchesRequestedBrand(product,requested) {
+  const brand = words(product.brand), family = words(requested);
+  if (!brand || !family) return false;
+  if (brand === family) return true;
+  // The family must name this retailer-declared brand and appear verbatim
+  // in the title. A competitor mentioning the same line cannot qualify.
+  return (' '+family+' ').includes(' '+brand+' ') && (' '+words(product.name)+' ').includes(' '+family+' ');
+}
+
 export async function quoteShoppingList(retailer, source, items, origin, resolve = resolveMedication) {
   const pendingBrands = [];
   for (const item of items) {
@@ -15,7 +27,7 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
       includeGenerics:!item.sku && Boolean(item.includeGenerics || item.genericOnly)},source);
     let rows=selection.products ?? [];
     if (item.genericOnly) rows=rows.filter(p=>p.type==='Genérico');
-    if (item.brand) rows=rows.filter(p=>p.brand?.trim().toLocaleLowerCase('pt-BR')===item.brand.trim().toLocaleLowerCase('pt-BR'));
+    if (item.brand) rows=rows.filter(p=>matchesRequestedBrand(p,item.brand));
     if (items.length === 1 && selection.scope === 'direct_requested_pack' && rows.length) {
       const result = await quoteLocalOptions({...selection, products:rows}, source, origin, item.quantity ?? 1);
       const available = result.products.some(p => p.localStatus === 'available');
