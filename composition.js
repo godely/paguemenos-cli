@@ -12,7 +12,7 @@ export function compositionEvidence(product, item, facts) {
   if (sections.length !== 1) return {};
   const section = sections[0][2].replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/gi, ' ').replace(/\s+/g, ' ').trim();
   if ((section.match(/princípios?\s+ativos?\s*:/giu) ?? []).length !== 1) return {};
-  const label = section.match(/^Princípio ativo\s*:\s*(.+?)\s+Excipientes\s*:/iu)?.[1];
+  const label = section.match(/^Princípio ativo\s*:\s*(.+?)(?:\s+Excipientes\s*:|$)/iu)?.[1];
   if (!label) return {};
   const doses = [...label.matchAll(dosePattern)];
   if (doses.length !== 1) return {};
