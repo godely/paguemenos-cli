@@ -32,3 +32,35 @@ test('one partner basket checks every selected line together after brand consent
   assert.equal(count,1);assert.equal(result.estimatedProductTotalBRL,8);assert.equal(result.status,'fulfillable');
   assert.throws(()=>shoppingItems(['abc'],{generic:['A'],'brand-only':['A']}));
 });
+
+test('a missing exact item leaves a dated partial quote for the other lines and no whole-basket subtotal',async()=>{
+  const {quoteShoppingList}=await import('./partner-plan.js');
+  const quoted=[];
+  const source={product:async sku=>{
+    if(sku==='3') throw Error('catalog outage');
+    return sku==='1'?[{sku,sellerId:'s',name:'Pack',currentPrice:3}]:[];
+  },basket:async lines=>{
+    quoted.push(lines.map(l=>[l.offer.sku,l.quantity]));
+    return lines.map(({offer,quantity})=>({...offer,requestedQuantity:quantity,localStatus:'available',methods:[],observedAt:'2026-01-01T00:00:00Z'}));
+  }};
+  const d=await quoteShoppingList('paguemenos',source,[{query:'1',quantity:2},{query:'2'},{query:'3'}],'01001000');
+  assert.deepEqual(quoted,[[['1',2]]]);assert.equal(d.status,'partial');
+  assert.equal(d.estimatedProductTotalBRL,null);assert.equal(d.partialQuote.estimatedProductTotalBRL,6);
+  assert.deepEqual(d.partialQuote.labels,['A']);
+  assert.deepEqual(d.pending.map(r=>[r.label,r.status]),[['B','unknown_sku'],['C','catalog_lookup_failed']]);
+  const missing=await quoteShoppingList('paguemenos',source,[{query:'2'}],'01001000');
+  assert.equal(missing.status,'unfilled'); assert.equal(missing.partialQuote,undefined);
+  const failure=await quoteShoppingList('paguemenos',source,[{query:'3'}],'01001000');
+  assert.equal(failure.status,'source_failed');assert.equal(quoted.length,1);
+});
+
+test('only actual alternatives request selection; rejected preferences never trigger a substitute quote',async()=>{
+  const {quoteShoppingList}=await import('./partner-plan.js');
+  const source={search:async()=>[{sku:'2',name:'Pack B'},{sku:'3',name:'Pack C'}],
+    product:async sku=>[{sku,name:'Marca A 10 mg',brand:'Marca A',type:'Referência'}],
+    basket:assert.fail};
+  const choice=await quoteShoppingList('paguemenos',source,[{query:'Marca',includeGenerics:false}],'01001000');
+  assert.equal(choice.status,'choose_products'); assert.equal(choice.pending[0].status,'choose_product');
+  const excluded=await quoteShoppingList('paguemenos',source,[{query:'1',brand:'Outra'}],'01001000');
+  assert.equal(excluded.status,'unfilled');assert.equal(excluded.pending[0].status,'preference_unavailable');
+});
