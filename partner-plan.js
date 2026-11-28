@@ -1,4 +1,4 @@
-import { hasPickupOffer, physicalShopping, permitsStockExpansion } from './branch-shopping.js';
+import { hasPickupOffer, physicalShopping, permitsStockExpansion, referenceDetails } from './branch-shopping.js';
 import { inventoryConfig } from './branch-inventory.js';
 import { crossRetailerPlans } from './pickup-plans.js';
 import { fixedStoreSource, quoteLocalOptions } from './compare.js';
@@ -131,11 +131,12 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
       const status = result.status === 'source_failed' ? 'source_failed' : available ? 'fulfillable' :
         (result.status === 'partial' || result.unverified?.length || result.products.some(p => p.localStatus !== 'unavailable')) ? 'unverified' : 'unavailable';
       return withInventory({ ...result, status, quoteStatus:result.status, planningScope:'one_pack_alternatives',
-        tables:[{query:item.query, status, choices:result.products}], routeStatus:'branch_inventory_unverified' });
+        tables:[{query:item.query, status, choices:result.products, ...referenceDetails(selection)}], routeStatus:'branch_inventory_unverified' });
     }
     const choices=new Set(rows.map(p=>p.sku));
     const verifiedChoices = rows.filter(row=>row.sku && row.sellerId).map(({sku,sellerId})=>({sku,sellerId}));
-    tables.push({query:item.query,status:selection.status,choices:selection.candidates??rows,verifiedChoices});
+    tables.push({query:item.query,status:selection.status,choices:selection.candidates??rows,verifiedChoices,
+      ...referenceDetails(selection)});
     if (choices.size===1) lines.push({sku:rows[0].sku,quantity:item.quantity ?? 1});
   }
   if(lines.length!==items.length) return withInventory({retailerId:retailer,status:'choose_products',tables});

@@ -136,6 +136,11 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
         for (const line of plan.unfilled ?? []) console.log('Pendente: '+describeUnfilled(line));
       }
       for (const line of partial?.unfilled ?? []) console.log('Pendente: '+describeUnfilled(line));
+      for (const table of result.tables ?? []) {
+        if (table.presentationChoices?.length || (table.status === 'no_match' && table.requestedBrand)) {
+          console.log(table.query + ' — ' + purchaseCatalogNotice(table));
+        }
+      }
       const difference=itinerary.comparison;
       if (difference) console.log(describePlanDifference(difference));
       if (itinerary.plans.length) console.log('Subtotal dos itens listados. Frete e taxas à parte.');
@@ -203,6 +208,7 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     }
     if(!v.json && result.fixedStore) printFixedStore(result.fixedStore);
     if(v.json) console.log(JSON.stringify(result,null,2));
+    else if (result.presentationChoices?.length || (result.status === 'no_match' && result.requestedBrand)) console.log(purchaseCatalogNotice(result));
     else {
       console.log(result.status);
       const rows=result.candidates??result.products??[];
