@@ -203,7 +203,10 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
   if(command==='stores') {
     const stores=await source.stores(origin);
     if(v.json) console.log(JSON.stringify(stores,null,2));
-    else console.table(stores.map(s=>({id:s.id,name:s.storeName,address:s.address.street,city:s.address.city,lat:s.address.latitude,lon:s.address.longitude,km:s.distanceKm,phone:s.phone})));
+    else console.table(stores.map(s=>({id:s.id,name:s.storeName,address:[s.address.street,s.address.number].filter(Boolean).join(', '),
+      city:s.address.city,lat:s.address.latitude,lon:s.address.longitude,km:s.distanceKm,phone:s.phone,
+      'Seg–sex':s.openingHours?.weekdays,'Sábado':s.openingHours?.saturday,'Domingo':s.openingHours?.sunday,
+      'Feriados':s.openingHours?.holidays ?? (s.opensOnHolidays === true ? 'Abre (horário não informado)' : undefined)})));
     if(!stores.length) process.exitCode=3;
     return;
   }
