@@ -224,6 +224,11 @@ async function collectPartnerBlocks(result, items, quoteSubset) {
   return {blocks, failures, limited, singleOutcomes};
 }
 
+function betterRank(a,b) {
+  for (let i=0; i<a.length; i++) if (a[i] !== b[i]) return a[i] < b[i];
+  return false;
+}
+
 function bestPlans(blocks, count) {
   const keyOf = s => s.retailerId + ':' + (s.branchId ?? s.id);
   const stores = new Map(), coordinates = new Map();
@@ -249,10 +254,6 @@ function bestPlans(blocks, count) {
     byItem[Math.min(...indices)].push(entry);
   }
   let fewest, cheapest, covered = 0, nodes = 0, limited = false;
-  const ordered = (a,b) => {
-    for (let i=0; i<a.length; i++) if (a[i] !== b[i]) return a[i] < b[i];
-    return false;
-  };
   let allowPartial = false;
   const deadline = performance.now() + 2000;
   const usedItems = new Set(), usedStops = new Set(), quotedStops = new Set(), selected = [];
@@ -288,8 +289,8 @@ function bestPlans(blocks, count) {
     const fewRank = [stops.length,distance,cost,proximity], priceRank = [cost,stops.length,distance,proximity];
     const plan = {stopCount:stops.length,roundTripKm:route.km,routeExactAmongChosenStops:route.exact,
       totalBRL:Number.isFinite(cost) ? cost/100 : null,stops};
-    if (!fewest || ordered(fewRank,fewest.rank)) fewest = {rank:fewRank,plan};
-    if (Number.isFinite(cost) && (!cheapest || ordered(priceRank,cheapest.rank))) cheapest = {rank:priceRank,plan};
+    if (!fewest || betterRank(fewRank,fewest.rank)) fewest = {rank:fewRank,plan};
+    if (Number.isFinite(cost) && (!cheapest || betterRank(priceRank,cheapest.rank))) cheapest = {rank:priceRank,plan};
   }
   function visit(i,cost,skipped) {
     if (reachable.size - skipped < covered) return;
@@ -324,10 +325,10 @@ function bestPlans(blocks, count) {
   }
   // If the exhaustive search timed out before finding a complete cover, each
   // existing block still provides a candidate that can be checked on its own.
-  if (limited && !fewest) {
+  if (limited && covered < count) {
     for (const entries of byItem) for (const block of entries) consider([block],block.cost,block.indices.length);
   }
-  return {covered, fewest:fewest?.plan, cheapest:cheapest?.plan, limited};
+  return {covered, fewest, cheapest, limited};
 }
 
 export async function crossRetailerPlans(results, items, quoteSubset) {
@@ -344,9 +345,38 @@ export async function crossRetailerPlans(results, items, quoteSubset) {
     }
     return report;
   }));
-  const overall = summarizePlans(reports,results,items);
+  const selections = new Map();
+  function solve(indices) {
+    const key = indices.join(',');
+    if (selections.has(key)) return selections.get(key);
+    const solution = bestPlans(indices.flatMap(i => reports[i].blocks),items.length);
+    // A broad search can spend its budget before reaching a cheaper or more
+    // complete itinerary already feasible in a smaller selection. Each subset
+    // uses exactly these quotes and keeps its own verified stops and rankings.
+    if (solution.limited && indices.length > 1) {
+      for (const omitted of indices) {
+        const subset = solve(indices.filter(i => i !== omitted));
+        if (subset.covered < solution.covered) continue;
+        if (subset.covered > solution.covered) {
+          solution.covered = subset.covered;
+          solution.fewest = subset.fewest;
+          solution.cheapest = subset.cheapest;
+          continue;
+        }
+        for (const objective of ['fewest','cheapest']) {
+          const candidate = subset[objective];
+          if (candidate && (!solution[objective] || betterRank(candidate.rank,solution[objective].rank))) {
+            solution[objective] = candidate;
+          }
+        }
+      }
+    }
+    selections.set(key,solution);
+    return solution;
+  }
+  const overall = summarizePlans(reports,results,items,solve(results.map((_,i) => i)));
   if (results.length > 1) overall.byRetailer = Object.fromEntries(results.flatMap((r,j) =>
-    r.retailerId === 'drogasil' ? [] : [[r.retailerId,summarizePlans([reports[j]],[r],items)]]));
+    r.retailerId === 'drogasil' ? [] : [[r.retailerId,summarizePlans([reports[j]],[r],items,solve([j]))]]));
   return overall;
 }
 
@@ -390,8 +420,10 @@ function lineOutcome(result,report,i) {
   return report.singleOutcomes?.get(i) ?? 'pickup_unknown';
 }
 
-function summarizePlans(reports,results,items) {
-  const {fewest,cheapest,covered,limited} = bestPlans(reports.flatMap(r => r.blocks),items.length);
+function summarizePlans(reports,results,items,solution) {
+  const {covered,limited} = solution;
+  const fewest = solution.fewest?.plan;
+  const cheapest = solution.cheapest?.plan;
   const partial = covered < items.length;
   const pending = partial ? items.map((item,i) => ({
     item:i, name:/^\d+$/.test(item.query) ? 'Item '+(i+1) : item.query,

@@ -232,3 +232,39 @@ for (const retailer of ['paguemenos','drogariasaopaulo']) {
     } finally {process.exitCode=old;}
   });
 }
+
+test('adding a dense retailer preserves a cheaper two-chain itinerary under the search limit', async () => {
+  const items = ['Primeiro','Segundo','Terceiro','Quarto'].map(query => ({query}));
+  const partners = ['paguemenos','drogariasaopaulo'].map((retailerId,j) => ({
+    retailerId, tables:items.map((_,i) => i % 2 === j ? {status:'matches',choices:[{}]} : {status:'no_match'}),
+  }));
+  const calls = [];
+  async function quote(id,indices) {
+    calls.push([id,...indices]);
+    return {
+      items:indices.map(i => ({sku:String(i+1), name:items[i].query, requestedQuantity:1,
+        currentPrice:2, localStatus:'available', methods:[method(id+'-centro')]})),
+      commonPickupPoints:[{id:id+'-centro'}],
+    };
+  }
+  const before = await crossRetailerPlans(partners,items,quote);
+  const originalCalls = calls.splice(0);
+  const [original] = before.plans;
+  assert.deepEqual([original.stopCount, original.totalBRL], [2,8]);
+
+  const extra = {retailerId:'drogasil', branchChoices:items.map(({query},i) =>
+    Array.from({length:28},(_,j) => ({sku:'item'+i, name:query, packs:1, unitPriceBRL:10,
+      store:{id:'filial'+j, name:'Filial '+j, quantity:1, distanceKm:1+j/10}})))};
+  const combined = await crossRetailerPlans([extra,...partners],items,quote);
+  assert.ok(combined.searchLimited);
+  assert.deepEqual(combined.plans.map(p => [p.objective,p.stopCount,p.totalBRL]),
+    [['fewest_stores',1,40],['lowest_price',2,8]]);
+  assert.deepEqual(combined.plans[1].stops,original.stops);
+  assert.deepEqual(calls,originalCalls,'reusing verified itineraries requires no additional retailer quotes');
+
+  const partial = await crossRetailerPlans([extra,...partners],[...items,{query:'Item sem oferta'}],quote);
+  assert.equal(partial.partialBasket.filledCount,4);
+  assert.deepEqual(partial.plans,[]);
+  assert.deepEqual(partial.partialBasket.plans.map(p => [p.stopCount,p.totalBRL,p.unfilled.map(i=>i.item)]),
+    [[1,40,[4]],[2,8,[4]]]);
+});
