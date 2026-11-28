@@ -10,8 +10,8 @@ export async function compareOffers(args, source, compare = retailerComparison) 
   const origin = args.coordinates ?? args.zipcode;
   const hasCheckout = typeof source.local === 'function';
   if (args.store) source = fixedStoreSource(args.retailer, source, origin, args.store);
-  const result = await compare(args, source);
-  if (!origin || !result.products?.length) return result;
+  const result = await quotePresentationOptions(await compare(args,source),source,origin,1);
+  if (!origin || !result.products?.length) return args.store ? source.withStoreEvidence(result) : result;
   const config = inventoryConfig(args.retailer);
   const physical = args.store || args.expandSearch || config;
   const quoted = hasCheckout
@@ -32,30 +32,42 @@ export async function compareOffers(args, source, compare = retailerComparison) 
 
 export async function quoteLocalOptions(result, source, origin, quantity) {
   const products = [];
-  let failures = 0;
+  let failures = 0, partial = false;
   for (const row of result.products) {
     try {
       const quote = await source.local(row, origin, quantity);
+      if (quote.localStatus === 'lookup_failed') failures++;
+      if (quote.pickupVerification && quote.pickupVerification.status !== 'verified') partial = true;
       const pickup = quote.methods.filter(m => m.channel === 'pickup-in-point' && m.pickupPointId);
       const measured = pickup.length && pickup.every(m => Number.isFinite(m.distanceKm));
       const closest = measured ? pickup.reduce((a,b) => a.distanceKm <= b.distanceKm ? a : b) : null;
-      products.push({...quote, closestQuotedPickup:closest, branchQuantity:null});
+      products.push({...row,...quote, requestedQuantity:quantity, closestQuotedPickup:closest, branchQuantity:null});
     } catch {
       failures++;
-      products.push({...row, localStatus:'lookup_failed', ...(source.fixedStore && {pickupAtStore:'lookup_failed'}), methods:[], closestQuotedPickup:null, branchQuantity:null});
+      products.push({...row, requestedQuantity:quantity, localStatus:'lookup_failed', ...(source.fixedStore && {pickupAtStore:'lookup_failed'}), methods:[], closestQuotedPickup:null, branchQuantity:null});
     }
   }
   // Keep the requested brand first and sort within each group by its updated price.
   products.sort((a,b) => Number(a.role==='generic') - Number(b.role==='generic') ||
     (a.currentPrice ?? Infinity) - (b.currentPrice ?? Infinity) || String(a.sku).localeCompare(String(b.sku)));
-  const status = products.length && failures === products.length ? 'source_failed' : failures ? 'partial' : result.status;
-  if (result.scope === 'direct_requested_pack') {
-    const pickup = products.filter(p => p.localStatus === 'available' && p.methods.some(m =>
-      m.channel === 'pickup-in-point' && m.pickupPointId));
-    const best = pickup.find(p => Number.isFinite(p.currentPrice));
+  const status = products.length && failures === products.length ? 'source_failed' : failures || partial ? 'partial' : result.status;
+  if (['direct_requested_pack','equivalents_in_reference_catalog','verified_drop_presentation'].includes(result.scope)) {
+    let best;
+    for (const product of products) {
+      const pickup = product.localStatus === 'available' && product.methods.some(m => m.channel === 'pickup-in-point' && m.pickupPointId);
+      if (pickup && Number.isFinite(product.currentPrice) && (!best || product.currentPrice < best.currentPrice)) best = product;
+    }
     return { ...result, status, products, stockEvidence:'fulfillment_quote',
       lowestPricedPickup:best ? {sku:best.sku,sellerId:best.sellerId,name:best.name,currentPrice:best.currentPrice,
         requestedQuantity:quantity,branchQuantity:null} : null };
   }
   return {...result,status,products,stockEvidence:'fulfillment_quote'};
+}
+
+// These are independent named offers. Never turn them into lines in the
+// original brand basket or count them as inventory of the requested brand.
+export async function quotePresentationOptions(selection, source, origin, quantity) {
+  if (!origin || !selection.comparisonOptions?.length || typeof source.local !== 'function') return selection;
+  const quoted = await quoteLocalOptions({status:'matches',products:selection.comparisonOptions},source,origin,quantity);
+  return {...selection, comparisonOptions:quoted.products, comparisonQuoteStatus:quoted.status};
 }

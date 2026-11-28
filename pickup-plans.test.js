@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {run} from './runner.js';
-import {crossRetailerPlans} from './pickup-plans.js';
+import {crossRetailerPlans, describePlanDifference, describePickupStop} from './pickup-plans.js';
 
 const method = id=>({channel:'pickup-in-point',pickupPointId:id,branch:id,distanceKm:1});
 
@@ -78,4 +78,193 @@ test('checks exact combinations of eligible products with their sellers and chec
   assert.equal(checked.length,4);
   assert.deepEqual(plans.plans.map(p=>[p.stopCount,p.totalBRL]),[[1,12],[2,6]]);
   assert.deepEqual(plans.plans[0].stops[0].pickups.map(p=>p.sku),['12','22']);
+});
+
+test('shopper tradeoff distinguishes longer, shorter, equal and unknown round trips', () => {
+  const describe = (extraKm, extraStops=1) => describePlanDifference({savingsBRL:8.4,extraStops,extraKm});
+  assert.match(describe(1.2), /8,40.*1 parada a mais.*1,2 km a mais.*linha reta/);
+  assert.match(describe(-0.24, 2), /2 paradas a mais.*240 m a menos/);
+  assert.match(describe(0, 0), /mesmo número de paradas.*mesma distância/);
+  assert.match(describe(null), /diferença de distância a confirmar/);
+});
+
+test('pickup stop keeps a branch name and its address without duplicating a street in the name', () => {
+  const address={street:'Rua da Pracinha',number:7};
+  assert.equal(describePickupStop({name:'Filial Praça -',address}),'Filial Praça — Rua da Pracinha, 7');
+  const name='Pague Menos - Rua da Pracinha, 7 (Loja 1)';
+  assert.equal(describePickupStop({name,address}),name);
+  assert.equal(describePickupStop({name:'Loja da Praça'}),'Loja da Praça');
+  assert.equal(describePickupStop({address:{addressLocal:'Avenida Um',addressNumber:'2'}}),'Avenida Um, 2');
+  assert.match(describePickupStop({name:'Rua da Pracinha 71',address}), /71 — Rua da Pracinha, 7$/);
+});
+
+test('partial routes maximize filled lines and compare only identical subsets', async () => {
+  const rows = (id, price, quantity=2) => [{sku:'x',name:'Opção',referencePriceBRL:price,
+    store:{id,name:id,quantity,distanceKm:1}}];
+  const stock = (...rows) => ({retailerId:'drogasil',tables:rows.map(rows=>({rows}))});
+  const lines = ['Ausente','Segundo','Terceiro'].map(query=>({query}));
+  const partner = {retailerId:'paguemenos',tables:[{status:'no_match'},{status:'no_match'},{status:'choose_reference'}]};
+  const result = await crossRetailerPlans([stock([],rows('one',9),[...rows('one',9),...rows('two',2)]),partner],lines,assert.fail);
+  const partial = result.partialBasket;
+  assert.equal(result.plans.length,0);
+  assert.deepEqual([partial.filledCount,partial.requestedCount],[2,3]);
+  assert.deepEqual(partial.plans.map(p=>[p.stopCount,p.totalBRL]),[[1,18],[2,11]]);
+  assert.equal(partial.comparison.savingsBRL,7);
+  assert.deepEqual(partial.plans[0].unfilled[0],{item:0,name:'Ausente',outcomes:[
+    {retailerId:'drogasil',reason:'pickup_unknown'},{retailerId:'paguemenos',reason:'catalog_miss'}]});
+
+  // Observations for the same box disagree. Both orderings must honor the lower count.
+  for(const reversed of [false,true]) {
+    const tables=[rows('only',8,1),rows('only',3,5)];
+    if(reversed) tables.reverse();
+    const r=await crossRetailerPlans([stock(...tables)],lines.slice(0,2),assert.fail);
+    assert.equal(r.partialBasket.filledCount,1);
+    assert.equal(r.partialBasket.plans[0].unfilled[0].outcomes[0].reason,'joint_unconfirmed');
+  }
+  const unpriced=await crossRetailerPlans([stock([],rows('one',null),rows('two',7))],lines,assert.fail);
+  assert.equal(unpriced.partialBasket.filledCount,2);
+  assert.deepEqual(unpriced.partialBasket.plans.map(p=>p.totalBRL),[null]);
+});
+
+test('same size incompatible partial baskets have no advertised savings',async()=>{
+  const quote=(i,price,stop)=>({sku:String(i),name:'Opção '+i,requestedQuantity:1,currentPrice:price,
+    localStatus:'available',methods:[method(stop)]});
+  const retailer={retailerId:'paguemenos',tables:Array.from({length:3},()=>({status:'matches',choices:[{}]}))};
+  const result=await crossRetailerPlans([retailer],['A','B','C'].map(query=>({query})),async(_,indices)=>{
+    if(indices.length===1) {
+      const [i]=indices;
+      return {planningScope:'one_pack_alternatives',products:[quote(i,i===0?12:2,i===1?'Y':'X')]};
+    }
+    if(indices.join(',')==='0,1') return {items:indices.map(i=>quote(i,10,'X')),commonPickupPoints:[{id:'X'}]};
+    return {items:[]};
+  });
+  assert.equal(result.partialBasket.filledCount,2);
+  assert.deepEqual(result.partialBasket.plans.map(p=>[p.unfilled[0].item,p.totalBRL,p.stopCount]),[[2,20,1],[0,4,2]]);
+  assert.equal(result.partialBasket.comparison,null);
+});
+
+test('a failed source, absent pack and delivery-only quote keep distinct pending reasons',async()=>{
+  const result=await crossRetailerPlans([
+    {retailerId:'drogasil',status:'source_failed'},
+    {retailerId:'paguemenos',tables:[{status:'no_match'},{status:'matches',choices:[{}]}]},
+  ],[{query:'123456'},{query:'Segundo'}],async()=>({items:[{localStatus:'available',requestedQuantity:1,
+    methods:[{channel:'delivery'}]}]}));
+  const partial=result.partialBasket;
+  assert.equal(partial.filledCount,0);
+  assert.deepEqual(partial.plans,[]);
+  assert.equal(partial.unfilled[0].name,'Item 1');
+  assert.deepEqual(partial.unfilled.map(l=>l.outcomes.map(o=>o.reason)),[
+    ['lookup_failed','catalog_miss'],['lookup_failed','pickup_not_offered']]);
+});
+
+for (const retailer of ['paguemenos','drogariasaopaulo']) {
+  test(retailer+' CLI prints a partial trip, pending presentation and partial exit code',async t=>{
+    const source={
+      search:async name=>name==='Produto A'?[{sku:'11'}]:[],
+      product:async()=>[{sku:'11',sellerId:'1',name:'Produto A'}],
+      local:async product=>({...product,requestedQuantity:1,localStatus:'available',currentPrice:4,methods:[method('Centro')]}),
+      basket:async rows=>rows.map(({offer,quantity})=>({...offer,requestedQuantity:quantity,
+        localStatus:'available',currentPrice:4,methods:[method('Centro')]})),
+    };
+    const out=t.mock.method(console,'log',()=>{});
+    const old=process.exitCode;
+    try {
+      await run(source,['plan','Produto A','Produto B','--brand-only','A','--brand-only','B','--lat','-12','--lon','-44'],retailer,
+        {choicesFor:async()=>[]});
+      assert.equal(process.exitCode,3);
+      assert.match(out.mock.calls.map(c=>c.arguments[0]).join('\n'),/1 de 2[\s\S]+Centro[\s\S]+Produto A[\s\S]+Pendente: Produto B/);
+    } finally {process.exitCode=old;}
+  });
+}
+
+test('a partial checkout keeps confirmed options and distinguishes a failed pickup check from an inconclusive reply', async () => {
+  const id='paguemenos';
+  const lines=[{query:'A'},{query:'B'},{query:'C'}];
+  const tables=lines.map(()=>({status:'matches',choices:[{}]}));
+  const quote=(localStatus,methods=[])=>({sku:'3',requestedQuantity:1,currentPrice:9,localStatus,methods});
+  for (const [first,reason] of [
+    [{status:'source_failed'},'lookup_failed'],
+    [{status:'partial',items:[quote('lookup_failed')]},'lookup_failed'],
+    [{status:'unresolved_items',pending:[{status:'source_failed'}]},'lookup_failed'],
+    [{status:'unresolved_items',pending:[{status:'choose_seller'}]},'pickup_unknown'],
+    [{status:'unverified'},'pickup_unknown'],
+    [{status:'fulfillable',items:[{...quote('available'),pickupVerification:{status:'incomplete'}}]},'pickup_unknown'],
+  ]) {
+    const plans=await crossRetailerPlans([{retailerId:id,tables}],lines,async (_,indices)=>{
+      if (indices.length>1) return {status:'unavailable',items:[]};
+      if (indices[0]===0) return first;
+      if (indices[0]===1) return {status:'unavailable',items:[quote('unavailable')]};
+      return {status:'fulfillable',items:[quote('available',[method('Centro')])]};
+    });
+    assert.deepEqual(plans.lookupFailures,[{retailerId:id,itemIndices:[0],reason}]);
+    const [partial]=plans.partialBasket.plans;
+    assert.equal(partial.stops[0].pickups[0].item,2);
+    assert.deepEqual(partial.unfilled.map(line=>line.outcomes[0].reason),[reason,'pickup_not_offered']);
+  }
+});
+
+test('a chain-wide lookup failure before checkout leaves the stage of failure unspecified', async () => {
+  const result=await crossRetailerPlans([{retailerId:'paguemenos',status:'source_failed'}],
+    [{query:'A'},{query:'B'}],assert.fail);
+  assert.deepEqual(result.lookupFailures,[]);
+  assert.ok(result.partialBasket.unfilled.every(line=>line.outcomes[0].reason==='lookup_failed'));
+});
+
+for (const retailer of ['paguemenos','drogariasaopaulo']) {
+  test(retailer+' terminal explains a missed pack without asking the shopper to choose from an empty table',async t=>{
+    const old=process.exitCode, query='Spray Marca de Teste frasco de 30 mL';
+    const out=t.mock.method(console,'log',()=>{}), table=t.mock.method(console,'table',()=>{});
+    const source={search:async()=>[],byGtin:async()=>[],product:async()=>[],simulate:assert.fail};
+    const args=['plan',query,'--brand-only','A','--lat','-12','--lon','-44'];
+    const options={choicesFor:async()=>[]};
+    try {
+      await run(source,args,retailer,options);
+      const text=out.mock.calls.map(c=>c.arguments[0]).join('\n');
+      assert.match(text,/frasco de 30 mL[\s\S]*catálogo consultado[\s\S]*estoque.*sem confirmação/i);
+      assert.doesNotMatch(text,/choose_products|sem estoque/i);
+      assert.equal(table.mock.callCount(),0);
+      assert.equal(process.exitCode,3);
+      await run(source,[...args,'--json'],retailer,options);
+      const result=JSON.parse(out.mock.calls.at(-1).arguments[0]);
+      assert.equal(result.status,'choose_products');
+      assert.equal(result.tables[0].status,'no_match');
+      assert.equal(process.exitCode,3);
+    } finally {process.exitCode=old;}
+  });
+}
+
+test('adding a dense retailer preserves a cheaper two-chain itinerary under the search limit', async () => {
+  const items = ['Primeiro','Segundo','Terceiro','Quarto'].map(query => ({query}));
+  const partners = ['paguemenos','drogariasaopaulo'].map((retailerId,j) => ({
+    retailerId, tables:items.map((_,i) => i % 2 === j ? {status:'matches',choices:[{}]} : {status:'no_match'}),
+  }));
+  const calls = [];
+  async function quote(id,indices) {
+    calls.push([id,...indices]);
+    return {
+      items:indices.map(i => ({sku:String(i+1), name:items[i].query, requestedQuantity:1,
+        currentPrice:2, localStatus:'available', methods:[method(id+'-centro')]})),
+      commonPickupPoints:[{id:id+'-centro'}],
+    };
+  }
+  const before = await crossRetailerPlans(partners,items,quote);
+  const originalCalls = calls.splice(0);
+  const [original] = before.plans;
+  assert.deepEqual([original.stopCount, original.totalBRL], [2,8]);
+
+  const extra = {retailerId:'drogasil', branchChoices:items.map(({query},i) =>
+    Array.from({length:28},(_,j) => ({sku:'item'+i, name:query, packs:1, unitPriceBRL:10,
+      store:{id:'filial'+j, name:'Filial '+j, quantity:1, distanceKm:1+j/10}})))};
+  const combined = await crossRetailerPlans([extra,...partners],items,quote);
+  assert.ok(combined.searchLimited);
+  assert.deepEqual(combined.plans.map(p => [p.objective,p.stopCount,p.totalBRL]),
+    [['fewest_stores',1,40],['lowest_price',2,8]]);
+  assert.deepEqual(combined.plans[1].stops,original.stops);
+  assert.deepEqual(calls,originalCalls,'reusing verified itineraries requires no additional retailer quotes');
+
+  const partial = await crossRetailerPlans([extra,...partners],[...items,{query:'Item sem oferta'}],quote);
+  assert.equal(partial.partialBasket.filledCount,4);
+  assert.deepEqual(partial.plans,[]);
+  assert.deepEqual(partial.partialBasket.plans.map(p => [p.stopCount,p.totalBRL,p.unfilled.map(i=>i.item)]),
+    [[1,40,[4]],[2,8,[4]]]);
 });

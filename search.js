@@ -1,4 +1,5 @@
-import { medicationIntent, verifiedRow } from 'drogasil-cli/medication-catalog';
+import { matchesRetailBrandLine, medicationIntent, verifiedRow } from 'drogasil-cli/medication-catalog';
+import { catalogQuery, consistentPackCount, documentedSublingual, normalizeSublingual, presentationSearchTerms, requestsSublingual } from 'drogasil-cli/retailer-workflows';
 
 const fold = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 const connectors = new Set(['a', 'de', 'da', 'do', 'em', 'com', 'e']);
@@ -6,7 +7,7 @@ const isDose = word => /^\d+(?:\.\d+)?(?:mg|mcg|ui|g|%)(?:\/|$)/.test(word);
 
 // Keep a dose/concentration together so "10 mg" cannot match "110 mg" or "10 mg/mL".
 function words(value) {
-  return (fold(value).replace(/(\d),(?=\d)/g, '$1.')
+  return (normalizeSublingual(fold(value)).replace(/(\d),(?=\d)/g, '$1.')
     .match(/\d+(?:\.\d+)?\s*(?:mcg|mg|kg|ml|ui|g|l|%)(?:\s*\/\s*(?:\d+(?:\.\d+)?\s*)?(?:ml|mg|g|l|h|dose))?(?![a-z])|[a-z]+|\d+(?:\.\d+)?/g) ?? [])
     .map(word => word.replace(/\s/g, '')).filter(word => !connectors.has(word));
 }
@@ -14,20 +15,23 @@ function words(value) {
 export function prepareSearch(query) {
   // Searching VTEX for a detached "mg" also retrieves hundreds of unrelated
   // medicines. Fetch the name, then check the original presentation on each SKU.
-  const text = query.split(/\s+(?=\d)/, 1)[0];
-  const requested = words(query);
+  const cleaned = catalogQuery(query);
+  const term = requestsSublingual(cleaned) ? presentationSearchTerms(cleaned) || cleaned : cleaned;
+  const text = term.split(/\s+(?=\d)/, 1)[0].replace(/,\s*$/, '').replace(/\s+d[ao]\s+/gi, ' ');
+  const requested = words(cleaned);
   const strengths = requested.filter(isDose);
   function matches(row) {
     if (!requested.length) return false;
     const title = words(row.name);
     const brand = words(row.brand);
     const facts = row.facts;
-    const active = String(facts.NomeSubstanciaPrincipioAtivo ?? '');
+    const active = String(facts.NomeSubstanciaPrincipioAtivo ?? row.activeIngredients ?? '');
     const ingredients = words(active);
     // Require a whole name token in an identity field. A description or indication
     // can mention a completely different medication.
     const first = requested[0];
-    if (title[0] !== first && !brand.includes(first) && !ingredients.includes(first)) return false;
+    if (title[0] !== first && !brand.includes(first) && !ingredients.includes(first) &&
+        !matchesRetailBrandLine(row,cleaned)) return false;
     const titleDoses = title.filter(isDose);
     const doseEvidence = titleDoses.length ? titleDoses : words(facts.Dosagem);
     if (!strengths.every(strength => doseEvidence.includes(strength))) return false;
@@ -39,8 +43,12 @@ export function prepareSearch(query) {
       if (!strengths.every(explicitlyPaired)) return false;
     }
     const presentation = [facts.Apresentação, facts['Tipo de Liberação']].flat().join(' ');
-    const evidence = new Set([...title, ...brand, ...ingredients, ...doseEvidence, ...words(presentation)]);
-    return requested.every(word => evidence.has(word));
+    if (/\d+\s*(?:comprimidos?|c[áa]psulas?)\b/iu.test(cleaned) &&
+        ![row.name, row.itemName].every(name => consistentPackCount(name, facts.Quantidade))) return false;
+    const evidence = new Set([...title, ...brand, ...ingredients, ...doseEvidence, ...words(presentation), ...words(row.manufacturer)]);
+    return requested.every(word => word === 'sublingual'
+      ? documentedSublingual(row.name, facts['Forma Farmacêutica'] ?? facts.Apresentação, facts['Via de Administração'] ?? facts['Forma de Administração'])
+      : evidence.has(word));
   }
   return { text, matches };
 }
@@ -135,7 +143,8 @@ export async function searchVerifiedCatalog(source, query, page, limit, intentFo
     const ingredients = [row.facts?.[field]].flat().filter(value => typeof value === 'string')
       .flatMap(value => value.split(/[,;]/)).map(value => value.trim())
       .filter(value => value && !/^antimicrobianos?$/iu.test(value));
-    const verified = verifiedRow(row, intent, {ingredients, evidence:{source:'retailer_field', field}});
+    const verified = verifiedRow(row, intent, ingredients.length ? {ingredients, evidence:{source:'retailer_field', field}} :
+      {ingredients:row.activeIngredients, evidence:row.ingredientEvidence});
     return verified ? [verified] : [];
   });
 }

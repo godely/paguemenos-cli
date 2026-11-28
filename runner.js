@@ -1,8 +1,9 @@
+import {describeUnfilled, describePickupStop, describePlanDifference} from './pickup-plans.js';
 import {hasPickupOffer} from './branch-shopping.js';
 import { confirmCliNames } from 'drogasil-cli/cli-name-confirmation';
 import { planShoppingList, shoppingItems } from './partner-plan.js';
 import { parseArgs } from 'node:util';
-import { renderPurchase, purchaseExitCode, acceptExpansion, retailerComparison, catalogInfo, catalogSnapshot, catalogType, requestsDrops, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
+import { renderInfoResult, infoExitCode, renderPurchase, purchaseExitCode, purchaseCatalogNotice, acceptExpansion, retailerComparison, catalogInfo, catalogSnapshot, catalogType, requestsDrops, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
 import { inventoryConfig, lookupBranchStock } from './branch-inventory.js';
 import { compareOffers } from './compare.js';
 import { checkoutOrigin, point } from './location.js';
@@ -16,7 +17,7 @@ const usage = {
   compare: 'compare <name or SKU> [--brand-only] [--cep CEP | --lat LAT --lon LON] [--store nearest|ID | --expand]',
   stock: 'stock <SKU> (--cep CEP | --lat LAT --lon LON) [--min-qty N | --quantity N | --all] [--max-branches N] [--expand]',
   stores: 'stores [--cep CEP | --lat LAT --lon LON]',
-  snapshot: 'snapshot collect <query...> [--limit N] | read <run-id> [--offset N --limit N] | export <run-id> --format json|csv|xlsx',
+  snapshot: 'snapshot collect [query...] [--limit N] | read <run-id> [--offset N --limit N] | export <run-id> --format json|csv|xlsx',
 };
 const flags = {
   plan:['cep','lat','lon','quantity','sku','brand','generic','brand-only','include-generics','store','expand'],
@@ -62,7 +63,7 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
       /^-\d/.test(x) && ['--lat','--lon'].includes(args[i-1]) ? [] : [x]);
     ({values:v,positionals:words} = parseArgs({args,allowPositionals:true,options}));
     if (command !== 'stores' && !words.length) throw Error(usage[command]);
-    if (command === 'stock' || command === 'plan' || (command === 'stores' && (source.directoryScope==='near_origin' || v.cep || v.lat || v.lon))) origin=location(v);
+    if (command === 'stock' || command === 'plan' || (command === 'stores' && (source.directoryScope==='near_origin' || [v.cep,v.lat,v.lon].some(x=>x!==undefined)))) origin=location(v);
     if (command === 'stores' && words.length) throw Error(usage.stores);
     if (command === 'compare' && [v.cep,v.lat,v.lon].some(x=>x!==undefined)) origin=location(v);
     if (v.store != null && (!origin || (v.store !== 'nearest' && (command !== 'compare' || !/^\d+$/.test(v.store)))))
@@ -78,7 +79,12 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     if (command === 'gtin' && (words.length!==1 || !validGtin(words[0]))) throw Error(usage.gtin);
     if (!positive(v.page??1) || !positive(v.limit??1, ['search','snapshot'].includes(command)?1000:50) || (command==='stock' && !positive(v.quantity??v['min-qty']??1))) throw Error('Invalid page, limit or quantity');
     if (command==='plan') items=shoppingItems(words,v);
-    if (command==='snapshot' && (!['collect','read','export'].includes(words[0]) || words.length<2 || !Number.isSafeInteger(Number(v.offset??0)) || Number(v.offset??0)<0)) throw Error(usage.snapshot);
+    if (command==='snapshot') {
+      const [action, ...terms] = words;
+      const offset = Number(v.offset ?? 0);
+      if (!['collect','read','export'].includes(action) || (action !== 'collect' && terms.length !== 1) ||
+          !Number.isSafeInteger(offset) || offset < 0) throw Error(usage.snapshot);
+    }
   } catch(error) { return usageError(error.message, args.includes('--json')); }
   if (['search','compare','info','plan'].includes(command)) {
     const queries = command === 'plan' ? items.map(item => item.sku ?? item.query) :
@@ -113,33 +119,50 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     }
     if(!v.json && result.fixedStore) printFixedStore(result.fixedStore);
     if(v.json) console.log(JSON.stringify(result,null,2));
-    else if (result.pickupPlans?.plans.length) {
+    else if (result.pickupPlans?.plans.length || result.pickupPlans?.partialBasket) {
+      const partial = result.pickupPlans.partialBasket;
+      const itinerary = partial ?? result.pickupPlans;
+      if (partial) console.log('Cesta parcial. Itens confirmados: '+partial.filledCount+' de '+partial.requestedCount+'.');
       const titles={both:'Menos lojas e menor preço estimado',fewest_stores:'Menos lojas',lowest_price:'Menor preço estimado'};
       const money=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'});
-      for (const plan of result.pickupPlans.plans) {
+      for (const plan of itinerary.plans) {
         const total=plan.totalBRL == null ? 'total a confirmar' : money.format(plan.totalBRL);
         const distance=plan.roundTripKm == null ? 'distância a confirmar' : plan.roundTripKm.toFixed(2)+' km de ida e volta em linha reta';
         console.log(titles[plan.objective]+' · '+total+' · '+distance);
         for (const [i,stop] of plan.stops.entries()) {
-          const address=[stop.address?.street,stop.address?.number].filter(Boolean).join(', ');
-          console.log((i+1)+'. '+[stop.name,address].filter(Boolean).join(' — '));
+          console.log((i+1)+'. '+describePickupStop(stop));
           for (const p of stop.pickups) console.log('   '+p.packs+' × '+p.name);
         }
+        for (const line of plan.unfilled ?? []) console.log('Pendente: '+describeUnfilled(line));
       }
-      const difference=result.pickupPlans.comparison;
-      if (difference) console.log('Economia estimada de '+money.format(difference.savingsBRL)+' com '+difference.extraStops+' parada(s) a mais.');
-      console.log('Retirada confirmada para a quantidade pedida. Frete e taxas à parte.');
+      for (const line of partial?.unfilled ?? []) console.log('Pendente: '+describeUnfilled(line));
+      for (const table of result.tables ?? []) {
+        if (table.registeredPresentation || table.presentationChoices?.length || (table.status === 'no_match' && table.requestedBrand)) {
+          console.log(table.query + ' — ' + purchaseCatalogNotice(table));
+        }
+      }
+      const difference=itinerary.comparison;
+      if (difference) console.log(describePlanDifference(difference));
+      if (itinerary.plans.length) console.log('Subtotal dos itens listados. Frete e taxas à parte.');
       if (result.pickupPlans.searchLimited || result.pickupPlans.lookupFailures.length) console.log('Comparação parcial entre as opções verificadas.');
     }
     else if (result.planningScope === 'one_pack_alternatives') {
       if (result.lowestPricedPickup) console.log('Menor preço com retirada confirmada:', result.lowestPricedPickup.name,
         '—', result.lowestPricedPickup.currentPrice.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}));
       printQuotes(result.products);
+      for (const table of result.tables ?? []) {
+        if (table.registeredPresentation) console.log(purchaseCatalogNotice(table));
+      }
     }
     else if(result.pendingBrands) console.log('Quer considerar genéricos para '+result.pendingBrands.join(', ')+'?');
     else {
-      console.log(result.status);
-      for(const table of result.tables??[]) { console.log(table.query); emit(table.choices,false,['name','type','currentPrice']); }
+      if (result.status !== 'choose_products' || !result.tables?.length) console.log(result.status);
+      for (const table of result.tables ?? []) {
+        console.log(/^\d+$/.test(table.query) ? 'Produto solicitado' : table.query);
+        const notice = purchaseCatalogNotice(table);
+        if (notice) console.log(notice);
+        if (table.choices?.length) emit(table.choices,false,['name','type','currentPrice']);
+      }
       if(result.items) printQuotes(result.items);
       if(result.commonPickupPoints?.length) console.table(result.commonPickupPoints);
       if(result.estimatedProductTotalBRL!=null) console.log('Subtotal estimado (BRL)',result.estimatedProductTotalBRL);
@@ -161,13 +184,11 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     }
     const data=await catalogInfo({retailer:bin,queries:words,scope:v.brazil?'brazil':'catalog'},source);
     if (v.json) console.log(JSON.stringify(data,null,2));
-    else for (const result of data.results) {
-      console.log(result.query, result.status);
-      console.table(result.products.map(p=>({name:p.name, strengths:p.strengths.join(', '),forms:p.forms.join(', '),prescription:p.prescriptionLabel.join(', ')||'não confirmado',retention:p.prescription.retained === null ? (p.retentionLabel.join(', ')||'não confirmado') : p.prescription.retained ? 'Sim' : 'Não',receituário:p.prescription.form||'não confirmado',norma:p.prescription.rule,source:p.source})));
-      if(v.brazil) console.log(JSON.stringify(result.brazil??{status:'não confirmado'},null,2));
+    else {
+      const retailerName = bin === 'paguemenos' ? 'Pague Menos' : 'Drogaria São Paulo';
+      for (const result of data.results) console.log(renderInfoResult(result, retailerName));
     }
-    if(data.results.some(r=>['source_failed','partial'].includes(r.status)||r.nationalStatus==='source_failed')) process.exitCode=2;
-    else if(data.results.some(r=>r.status!=='matches' && !r.brazil?.presentations?.length)) process.exitCode=3;
+    process.exitCode = infoExitCode(data.results);
     return;
   }
   if (command==='compare') {
@@ -190,6 +211,12 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     }
     if(!v.json && result.fixedStore) printFixedStore(result.fixedStore);
     if(v.json) console.log(JSON.stringify(result,null,2));
+    else if (result.requestedBrand?.status==='listed' && result.registeredPresentation) {
+      if (origin) printQuotes(result.products);
+      else emit(result.products,false,['name','type','currentPrice']);
+      console.log(purchaseCatalogNotice(result));
+    }
+    else if (result.registeredPresentation || result.presentationChoices?.length || (result.status === 'no_match' && result.requestedBrand)) console.log(purchaseCatalogNotice(result));
     else {
       console.log(result.status);
       const rows=result.candidates??result.products??[];
@@ -201,9 +228,16 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     return;
   }
   if(command==='stores') {
-    const stores=await source.stores(origin);
+    const national = origin === undefined && source.nationalDirectory ? await source.nationalDirectory() : null;
+    const stores = national?.stores ?? await source.stores(origin);
+    if (national && !v.json)
+      console.log('O localizador da rede publicou '+stores.length+' filiais nas '+national.coverage.states+
+        ' UFs no levantamento de '+national.observedAt.slice(0,10)+'. A cobertura integral da rede está por confirmar.');
     if(v.json) console.log(JSON.stringify(stores,null,2));
-    else console.table(stores.map(s=>({id:s.id,name:s.storeName,address:s.address.street,city:s.address.city,lat:s.address.latitude,lon:s.address.longitude,km:s.distanceKm,phone:s.phone})));
+    else console.table(stores.map(s=>({id:s.id,name:s.storeName,address:[s.address.street,s.address.number].filter(Boolean).join(', '),
+      city:s.address.city,lat:s.address.latitude,lon:s.address.longitude,km:s.distanceKm,phone:s.phone,
+      'Seg–sex':s.openingHours?.weekdays,'Sábado':s.openingHours?.saturday,'Domingo':s.openingHours?.sunday,
+      'Feriados':s.openingHours?.holidays ?? (s.opensOnHolidays === true ? 'Abre (horário não informado)' : undefined)})));
     if(!stores.length) process.exitCode=3;
     return;
   }

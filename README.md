@@ -25,9 +25,24 @@ Product details include the retailer's original specification fields. Stock perf
 
 Use `info "name" "another name" --json` for retailer facts or add `--brazil` for sourced national presentations. A single numeric SKU keeps an array response. `compare <name or SKU>` checks equivalent packs in this retailer's catalog and accepts `--brand-only`. `product` accepts ordered SKU batches, preserving all sellers and missing slots. `snapshot collect|read|export` shares the durable catalog format and supports JSON, CSV and XLSX. All snapshot commands also require Python 3 (`python3` on PATH) for SQLite storage and exports.
 
-`stores --cep CEP` or `stores --lat LAT --lon LON` reads the Pague Menos store locator for that origin. `stock SKU` accepts either origin and an optional `--min-qty N`. The resulting quantity is the quantity requested from checkout. A successful quote confirms that fulfillment method. Branch inventory and nationwide directory coverage remain open.
+`stores --cep CEP` or `stores --lat LAT --lon LON` reads the Pague Menos store locator for that origin. `stock SKU` accepts either origin and an optional `--min-qty N`. The resulting quantity is the quantity requested from checkout. A successful quote confirms that fulfillment method. The nationwide directory is a dated survey of active branches returned by the locator. Current branch inventory requires separate evidence.
 
 `plan "item A" "item B" --cep CEP` checks the whole selected basket together. Use `--sku A=SKU`, `--quantity A=2`, or per-item brand and generic choices. Ambiguous options are returned for selection before checkout simulation. Product totals exclude fees. Common pickup points must cover all items. The planner checks complete pickup options and compares the available routes.
+
+### National store directory
+
+Use `paguemenos stores --json` to list the observed branches without supplying a location. Each national row includes the date of observation. Use `paguemenos stores --cep "$CEP"` or coordinates to query the live locator for nearby branches.
+
+The national directory combines overlapping 300 km searches around public municipal seats. Each seat in the geographic source is within 200 km of at least one search center. A branch must appear as active under the Pague Menos banner. The collector deduplicates by the retailer's branch ID, and clears the distance from the municipal survey center. National coverage is reported as unconfirmed because the locator may omit branches. Published opening hours and addresses are dated directory information. Prices, pickup offers and shelf quantities require their own queries. [Pague Menos locator](https://www.paguemenos.com.br/nossas-lojas) · [IBGE seat coordinates published by Infra S.A.](https://geo.infrasa.gov.br/server/rest/services/Hosted/Sede_Municipal/FeatureServer/0)
+
+The November 28, 2026 survey recorded 1,300 distinct active branches across the 27 UFs, with 4,913 branch observations in 129 windows. Of 211 municipalities associated with the company's CNPJ root in the October 2 Farmácia Popular workbook, 203 appeared in the survey. Direct checks at the other eight municipal seats also found no corresponding city entry on the retailer site. The dates, participating programs and branch naming can differ.
+
+Maintainers can refresh the packaged file and compare its cities with the establishments participating in Farmácia Popular. The audit reports the overlap for Pague Menos's corporate CNPJ root. City and address overlap is a cross-check on coverage. The Ministry publishes the participating subset of pharmacies. [Ministry workbook](https://www.gov.br/saude/pt-br/composicao/sectics/farmacia-popular/publicacoes/farmacias-participante-do-programa-farmacia-popular/view)
+
+```sh
+node scripts/collect-directory.mjs data/stores.json.gz
+python3 scripts/check-registered-cities.py data/stores.json.gz "$FARMACIA_POPULAR_XLSX"
+```
 
 ### Optional inventory by physical branch
 

@@ -6,6 +6,14 @@ import { run } from './runner.js';
 
 const site = 'https://example.com';
 const seller = { sellerId: '1', commertialOffer: {} };
+test('sublingual suggestions retrieve the brand and verify the individual pack', () => {
+  const {text, matches} = prepareSearch('Rivotril sublingual 0,25 mg');
+  assert.equal(text,'Rivotril');
+  const row = {name:'Rivotril 0,25 mg 30 comprimidos',facts:{'Via de Administração':['Via oral','Sublingual']}};
+  assert.equal(matches(row),false);
+  assert.equal(matches({...row,name:row.name+' sublinguais'}),true);
+  assert.equal(matches({...row,name:'Rivotril 2 mg 30 comprimidos sublinguais'}),false);
+});
 function product(id, name, ingredient) {
   return {
     allSpecifications: ['NomeSubstanciaPrincipioAtivo'], NomeSubstanciaPrincipioAtivo: [ingredient],
@@ -128,4 +136,37 @@ test('standalone catalog checks Pague Menos ingredient evidence before exposing 
   }));
   assert.deepEqual(result.map(hit=>hit.name),['Prednisona 20mg','Outro produto']);
   assert.deepEqual(result.map(hit=>hit.ingredientEvidence.source),['retailer_title','retailer_field']);
+});
+
+for (const retailer of ['paguemenos','drogariasaopaulo']) {
+  test(retailer+' info prints the full presentation and distinguishes missing and conflicting evidence', async t => {
+    const source = {facts:async query => query === 'Ausente' ? [] : [{
+      sku:'1', name:'Marca 2 mg 20 comprimidos', type:'Referência', productUrl:'https://example.test/ficha',
+      facts:{Fabricante:['Fabricante X'], 'Princípio Ativo':['Substância X'], 'Via de Administração':['Oral','Tópica'],
+        'Tipo de Liberação':['Prolongada'], 'Tipo de Receita':['Venda sob prescrição médica','Venda livre']},
+    }]};
+    const output = t.mock.method(console, 'log', () => {});
+    const previous = process.exitCode;
+    try {
+      await run(source,['info','Marca','Ausente'],retailer,{choicesFor:async () => []});
+      const text = output.mock.calls.map(call => call.arguments[0]).join('\n');
+      for (const fact of ['Referência','Substância X','2 mg','Via: não confirmada','Oral, Tópica',
+        'Liberação: Prolongada','Embalagem: 20 comprimidos','Fabricante X','https://example.test/ficha',
+        'Precisa de receita? não confirmado','A farmácia retém? não confirmado','Qual receituário? não confirmado',
+        'As fontes divergem','Nenhuma apresentação encontrada']) assert.ok(text.includes(fact),fact);
+      assert.equal(process.exitCode,3);
+    } finally {process.exitCode = previous;}
+  });
+}
+
+test('a retail brand following its product line preserves volume and excludes unrelated merchandise',()=>{
+  const product={brand:'Dauf',name:'Solução Fisiológica Dauf Pro Soro 0,9% 500ml',facts:{}};
+  for(const query of ['Dauf Pro Soro 500 mL','Pro Soro Dauf 500 mL']) assert.ok(prepareSearch(query).matches(product));
+  for(const query of ['Pro Soro Dauf 100 mL','Pro Soro Dauf 10mg','Pro Soro Outramarca 500 mL']) {
+    assert.equal(prepareSearch(query).matches(product),false);
+  }
+  const match=prepareSearch('Pro Soro Dauf 500 mL').matches;
+  assert.equal(match({...product,name:'Acessório para Dauf Pro Soro 500 ml'}),false);
+  assert.equal(match({...product,name:'Dauf Pro Soro 2 x 500 ml'}),false);
+  assert.equal(match({...product,name:'Cloreto de Sódio Dauf 500ml',description:product.name}),false);
 });

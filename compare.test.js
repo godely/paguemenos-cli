@@ -42,3 +42,45 @@ test('pickup price ignores delivery-only and failed listings and honors requeste
   assert.equal(r.lowestPricedPickup.requestedQuantity,2);
   assert.equal(r.products.filter(p=>p.localStatus==='lookup_failed').length,1);
 });
+
+test('brand-first display and the lowest eligible pickup price are independent in all verified presentation scopes',async()=>{
+  const products=[
+    {sku:'brand',role:'requested_brand',currentPrice:24},
+    {sku:'generic',role:'generic',currentPrice:12},
+    {sku:'shipping',role:'generic',currentPrice:5},
+    {sku:'unknown',role:'generic',currentPrice:null},
+  ];
+  const source={local:async(row,origin,quantity)=>({...row,localStatus:'available',requestedQuantity:quantity,
+    methods:row.sku==='shipping'?[{channel:'delivery'}]:[{channel:'pickup-in-point',pickupPointId:'Filial'}]})};
+  for (const scope of ['direct_requested_pack','equivalents_in_reference_catalog','verified_drop_presentation']) {
+    const result=await quoteLocalOptions({scope,status:'matches',products},source,'origem',2);
+    assert.equal(result.products[0].sku,'brand');
+    assert.equal(result.lowestPricedPickup.sku,'generic');
+    assert.equal(result.lowestPricedPickup.currentPrice,12);
+    assert.equal(result.lowestPricedPickup.requestedQuantity,2);
+  }
+});
+
+test('a comparable registered pack has its own quote and cannot fill a missing similar brand',async()=>{
+  const product={sku:'generic',sellerId:'1',name:'Medicamento genérico',role:'presentation_comparison'};
+  const selection={status:'presentation_comparison',products:[],comparisonOptions:[product]};
+  const branch={id:'12',name:'Loja Centro',distanceKm:1};
+  let calls=0;
+  const source={stores:async()=>[branch],local:async(row,origin,quantity)=>{
+    calls++;return {...row,requestedQuantity:quantity,localStatus:'available',methods:[
+      {channel:'pickup-in-point',pickupPointId:'paguemenos12_a',branch:branch.name,distanceKm:1},
+      {channel:'pickup-in-point',pickupPointId:'paguemenos17_a',branch:'Outra loja',distanceKm:2},
+    ]};
+  }};
+  const catalog=await compareOffers({},source,async()=>selection);
+  assert.equal(calls,0); assert.equal(catalog.comparisonOptions[0],product);
+  const result=await compareOffers({retailer:'paguemenos',zipcode:'01001000',store:'nearest'},source,async()=>selection);
+  assert.deepEqual(result.products,[]); assert.equal(calls,1);
+  assert.equal(result.comparisonOptions[0].pickupAtStore,'offered');
+  assert.equal(result.comparisonOptions[0].methods.length,1);
+  assert.equal(result.comparisonOptions[0].branchQuantity,null);
+  assert.equal(result.fixedStore.branch.name,branch.name);
+  const failed=await compareOffers({zipcode:'01001000'},{local(){throw Error('offline')}},async()=>selection);
+  assert.equal(failed.comparisonQuoteStatus,'source_failed');
+  assert.equal(failed.comparisonOptions[0].localStatus,'lookup_failed');
+});

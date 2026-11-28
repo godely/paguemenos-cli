@@ -1,8 +1,9 @@
-import { hasPickupOffer, physicalShopping, permitsStockExpansion } from './branch-shopping.js';
+import { hasPickupOffer, physicalShopping, permitsStockExpansion, referenceDetails } from './branch-shopping.js';
 import { inventoryConfig } from './branch-inventory.js';
 import { crossRetailerPlans } from './pickup-plans.js';
-import { fixedStoreSource, quoteLocalOptions } from './compare.js';
+import { fixedStoreSource, quoteLocalOptions, quotePresentationOptions } from './compare.js';
 import { resolveMedication } from 'drogasil-cli';
+import { matchesRetailBrandLine } from 'drogasil-cli/medication-catalog';
 import { retailerComparison, retailerBasket } from 'drogasil-cli/retailer-workflows';
 
 const words = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu,'')
@@ -10,6 +11,7 @@ const words = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu,''
 
 export function matchesRequestedBrand(product,requested) {
   const brand = words(product.brand), family = words(requested);
+  if (family && product.type === 'Genérico' && words(product.manufacturer) === family) return true;
   const trade = words(product.requestedTradeName);
   if (trade && product.role === 'requested') {
     if (trade === family) return true;
@@ -17,7 +19,7 @@ export function matchesRequestedBrand(product,requested) {
         (words(product.requestedReferenceTitle)+' ').startsWith(family+' ')) return true;
   }
   if (!brand || !family) return false;
-  if (brand === family) return true;
+  if (brand === family || matchesRetailBrandLine(product,requested)) return true;
   // The family must name this retailer-declared brand and appear verbatim
   // in the title. A competitor mentioning the same line cannot qualify.
   return (' '+family+' ').includes(' '+brand+' ') && (' '+words(product.name)+' ').includes(' '+family+' ');
@@ -106,6 +108,12 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
       if (!includeInventory) throw error;
       selection = {status:'catalog_lookup_failed',products:[]};
     }
+    if (selection.comparisonOptions?.length) {
+      const filterManufacturer = item.brand && words(item.brand)!==words(selection.requestedBrand?.name);
+      const relevant = item.sku ? [] : filterManufacturer ?
+        selectBrandOptions(selection.comparisonOptions,item.brand,false).products : selection.comparisonOptions;
+      selection = await quotePresentationOptions({...selection,comparisonOptions:relevant},source,origin,item.quantity ?? 1);
+    }
     let rows=selection.products ?? [];
     if (item.genericOnly) rows=rows.filter(p=>p.type==='Genérico');
     if (item.brand && rows.length) {
@@ -129,11 +137,12 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
       const status = result.status === 'source_failed' ? 'source_failed' : available ? 'fulfillable' :
         (result.status === 'partial' || result.unverified?.length || result.products.some(p => p.localStatus !== 'unavailable')) ? 'unverified' : 'unavailable';
       return withInventory({ ...result, status, quoteStatus:result.status, planningScope:'one_pack_alternatives',
-        tables:[{query:item.query, status, choices:result.products}], routeStatus:'branch_inventory_unverified' });
+        tables:[{query:item.query, status, choices:result.products, ...referenceDetails(selection)}], routeStatus:'branch_inventory_unverified' });
     }
     const choices=new Set(rows.map(p=>p.sku));
     const verifiedChoices = rows.filter(row=>row.sku && row.sellerId).map(({sku,sellerId})=>({sku,sellerId}));
-    tables.push({query:item.query,status:selection.status,choices:selection.candidates??rows,verifiedChoices});
+    tables.push({query:item.query,status:selection.status,choices:selection.candidates??rows,verifiedChoices,
+      ...referenceDetails(selection)});
     if (choices.size===1) lines.push({sku:rows[0].sku,quantity:item.quantity ?? 1});
   }
   if(lines.length!==items.length) return withInventory({retailerId:retailer,status:'choose_products',tables});

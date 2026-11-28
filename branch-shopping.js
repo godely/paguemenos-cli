@@ -23,6 +23,18 @@ function physicalProducts(retailer, offers) {
     (a.referencePriceBRL ?? Infinity) - (b.referencePriceBRL ?? Infinity) || String(a.sku).localeCompare(String(b.sku)));
 }
 
+// Titles from the reference catalog clarify a pack. Keep the retailer's offer
+// and inventory lists reserved for products verified against its own catalog.
+export function referenceDetails(selection) {
+  if (selection.registeredPresentation) {
+    const {registeredPresentation,requestedBrand,comparisonOptions,comparisonStatus,comparisonQuoteStatus} = selection;
+    return {registeredPresentation,requestedBrand,comparisonOptions,comparisonStatus,comparisonQuoteStatus};
+  }
+  if (selection.requestedBrand?.status === 'no_exact_catalog_match') return {requestedBrand:selection.requestedBrand};
+  if (selection.status !== 'choose_reference' || !selection.presentationChoices?.length) return {};
+  return {presentationChoices:selection.presentationChoices, referenceCatalog:selection.referenceCatalog};
+}
+
 function prepare(retailer, items, selections) {
   return selections.map((selection,i) => {
     const item=items[i];
@@ -30,7 +42,7 @@ function prepare(retailer, items, selections) {
     const status=selection.status==='choose_reference' ? 'ambiguous' : selection.status;
     return {products, table:{...item, label:tableLabel(i), status, quantity:item.quantity ?? 1,
       selectedSku:item.sku, requestedBrandSkus:products.filter(p=>p.role==='requested').map(p=>p.sku),
-      candidates:selection.candidates, missingFields:selection.missingFields}};
+      candidates:selection.candidates, missingFields:selection.missingFields, ...referenceDetails(selection)}};
   });
 }
 
@@ -57,7 +69,7 @@ export function hasPickupOffer(quote) {
 export function permitsStockExpansion(quote) {
   const rows = quote.products ?? quote.items ?? [];
   return !['source_failed','partial','lookup_failed','unverified','unconfirmed'].includes(quote.status) &&
-    !rows.some(row => row.localStatus === 'lookup_failed') && !hasPickupOffer(quote);
+    !rows.some(row => row.localStatus === 'lookup_failed' || (row.pickupVerification && row.pickupVerification.status !== 'verified')) && !hasPickupOffer(quote);
 }
 
 export async function physicalShopping(retailer, source, items, selections, origin, {store, expandSearch=false, includeBranchChoices=false, allowExpansion=true}={}, config) {

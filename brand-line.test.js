@@ -74,3 +74,10 @@ test('a retailer that labels the manufacturer can use the verified title of the 
   for (const change of [{role:'generic'},{matchBasis:'title'},{requestedReferenceTitle:'Outro Patz GTS'}])
     assert.equal(matchesRequestedBrand({...product,...change},'Patz GTS'),false);
 });
+
+test('a shopper can retain the retail line with the brand at the end',()=>{
+  const requested='Pro Soro Dauf';
+  const product={brand:'Dauf',name:'Solução Fisiológica Dauf Pro Soro 0,9% 500ml'};
+  assert.ok(matchesRequestedBrand(product,requested));
+  assert.equal(matchesRequestedBrand({...product,brand:'Concorrente'},requested),false);
+});
