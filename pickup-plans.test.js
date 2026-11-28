@@ -209,3 +209,26 @@ test('a chain-wide lookup failure before checkout leaves the stage of failure un
   assert.deepEqual(result.lookupFailures,[]);
   assert.ok(result.partialBasket.unfilled.every(line=>line.outcomes[0].reason==='lookup_failed'));
 });
+
+for (const retailer of ['paguemenos','drogariasaopaulo']) {
+  test(retailer+' terminal explains a missed pack without asking the shopper to choose from an empty table',async t=>{
+    const old=process.exitCode, query='Spray Marca de Teste frasco de 30 mL';
+    const out=t.mock.method(console,'log',()=>{}), table=t.mock.method(console,'table',()=>{});
+    const source={search:async()=>[],byGtin:async()=>[],product:async()=>[],simulate:assert.fail};
+    const args=['plan',query,'--brand-only','A','--lat','-12','--lon','-44'];
+    const options={choicesFor:async()=>[]};
+    try {
+      await run(source,args,retailer,options);
+      const text=out.mock.calls.map(c=>c.arguments[0]).join('\n');
+      assert.match(text,/frasco de 30 mL[\s\S]*catálogo consultado[\s\S]*estoque.*sem confirmação/i);
+      assert.doesNotMatch(text,/choose_products|sem estoque/i);
+      assert.equal(table.mock.callCount(),0);
+      assert.equal(process.exitCode,3);
+      await run(source,[...args,'--json'],retailer,options);
+      const result=JSON.parse(out.mock.calls.at(-1).arguments[0]);
+      assert.equal(result.status,'choose_products');
+      assert.equal(result.tables[0].status,'no_match');
+      assert.equal(process.exitCode,3);
+    } finally {process.exitCode=old;}
+  });
+}
