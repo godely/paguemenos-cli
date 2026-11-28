@@ -78,10 +78,16 @@ def lookup(args):
         snapshot = db.execute("SELECT snapshot_at FROM snapshots WHERE retailer=?", (args.retailer,)).fetchone()
         if not snapshot:
             raise ValueError("no inventory snapshot for this retailer")
-        rows = db.execute("SELECT branch,units,observed FROM inventory WHERE retailer=? AND sku=?", (args.retailer, args.sku))
-        return {"snapshotAt": snapshot[0], "observations": [
-            {"storeId": branch, "quantity": units, "observedAt": observed} for branch, units, observed in rows
-        ]}
+        by_sku = {}
+        branches = set(json.loads(args.branches)) if args.command == "basket" else None
+        skus = args.skus if branches is not None else [args.sku]
+        for sku in dict.fromkeys(skus):
+            rows = db.execute("SELECT branch,units,observed FROM inventory WHERE retailer=? AND sku=?", (args.retailer, sku))
+            by_sku[sku] = [{"storeId": branch, "quantity": units, "observedAt": observed}
+                           for branch, units, observed in rows if branches is None or branch in branches]
+        if branches is None:
+            return {"snapshotAt": snapshot[0], "observations": by_sku[args.sku]}
+        return {"snapshotAt": snapshot[0], "bySku": by_sku}
 
 
 if __name__ == "__main__":
@@ -89,7 +95,10 @@ if __name__ == "__main__":
     commands = parser.add_subparsers(dest="command", required=True)
     importer = commands.add_parser("import")
     reader = commands.add_parser("lookup")
-    for command in (importer, reader):
+    basket = commands.add_parser("basket")
+    basket.add_argument("--branches", required=True)
+    basket.add_argument("skus", nargs="+")
+    for command in (importer, reader, basket):
         command.add_argument("--database", required=True)
         command.add_argument("--retailer", choices=RETAILERS, required=True)
     importer.add_argument("--snapshot-at", required=True)

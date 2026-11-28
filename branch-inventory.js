@@ -24,12 +24,8 @@ export async function loadObservations(retailer, database, sku) {
   return JSON.parse(stdout);
 }
 
-export function branchStock(retailer, sku, directory, feed, {
-  maxAgeMs, now = Date.now(), maxBranches = 30, minimum = 1, includeAll = false, expand = false,
-}) {
-  if (!Number.isFinite(maxAgeMs) || maxAgeMs <= 0 || !Number.isSafeInteger(maxBranches) || maxBranches < 3 || maxBranches > 30 ||
-      !Number.isSafeInteger(minimum) || minimum < 1) throw new RangeError('Invalid inventory search limits');
-  const observations = new Map(feed.observations.map(r => [r.storeId,r]));
+export function branchRows(directory, records, now, maxAgeMs) {
+  const observations = new Map(records.map(r => [r.storeId,r]));
   const ordered = [...directory].sort((a,b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity) || String(a.id).localeCompare(String(b.id)));
   const seen = new Set();
   const located = [];
@@ -50,6 +46,15 @@ export function branchStock(retailer, sku, directory, feed, {
     located.push({id, name: store.storeName, address: store.address, distanceKm: store.distanceKm, phone: store.phone ?? null,
       whatsapp: store.whatsapp ?? null, status, quantity, observedAt: entry?.observedAt ?? null});
   }
+  return {located,unknownDistanceStores};
+}
+
+export function branchStock(retailer, sku, directory, feed, {
+  maxAgeMs, now = Date.now(), maxBranches = 30, minimum = 1, includeAll = false, expand = false,
+}) {
+  if (!Number.isFinite(maxAgeMs) || maxAgeMs <= 0 || !Number.isSafeInteger(maxBranches) || maxBranches < 3 || maxBranches > 30 ||
+      !Number.isSafeInteger(minimum) || minimum < 1) throw new RangeError('Invalid inventory search limits');
+  const {located,unknownDistanceStores}=branchRows(directory,feed.observations,now,maxAgeMs);
   const initial = located.slice(0,maxBranches);
   const allZero = initial.length > 0 && !unknownDistanceStores && initial.every(s => s.quantity === 0);
   const radiusKm = initial.at(-1)?.distanceKm ?? null;
@@ -74,3 +79,9 @@ export async function lookupBranchStock(retailer, source, origin, sku, config, o
   return branchStock(retailer, sku, directory, feed, {...options, maxAgeMs: config.maxAgeMs});
 }
 
+
+export async function loadBasketObservations(retailer, database, skus, branches) {
+  const args = [indexer, 'basket', '--database', database, '--retailer', retailer, '--branches', JSON.stringify(branches), ...skus];
+  const {stdout} = await runFile('python3', args, {maxBuffer:32 * 1024 * 1024, timeout:30000});
+  return JSON.parse(stdout);
+}
