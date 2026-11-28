@@ -137,7 +137,12 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
     if (choices.size===1) lines.push({sku:rows[0].sku,quantity:item.quantity ?? 1});
   }
   if(lines.length!==items.length) return withInventory({retailerId:retailer,status:'choose_products',tables});
-  const checkout = await retailerBasket({retailer,items:lines,zipcode:origin},source);
+  let checkout;
+  try { checkout = await retailerBasket({retailer,items:lines,zipcode:origin},source); }
+  catch (error) {
+    if (!includeInventory) throw error;
+    checkout = {retailerId:retailer,status:'source_failed',items:[]};
+  }
   return withInventory({...checkout,tables, planningScope:'whole_basket_fulfillment',routeStatus:'branch_inventory_unverified'});
 }
 
