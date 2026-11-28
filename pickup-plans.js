@@ -116,7 +116,9 @@ async function collectPartnerBlocks(result, items, quoteSubset) {
   const id = result.retailerId;
   const indices = items.map((_,i) => i);
   const blocks = partnerBlocks(result,id,indices,items);
-  const initialProblem = quoteProblem(result);
+  // A chain-level exception before checkout has no evidence of a quote.
+  const initialProblem = result.planningScope || Array.isArray(result.items) || result.pending
+    ? quoteProblem(result) : null;
   const failures = initialProblem ? [{itemIndices:indices,reason:initialProblem}] : [];
   const singleOutcomes = new Map();
   let jointChecks = 0, combinations = 0, limited = false;

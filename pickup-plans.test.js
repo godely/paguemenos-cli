@@ -202,3 +202,10 @@ test('a partial checkout keeps confirmed options and distinguishes a failed pick
     assert.deepEqual(partial.unfilled.map(line=>line.outcomes[0].reason),[reason,'pickup_not_offered']);
   }
 });
+
+test('a chain-wide lookup failure before checkout leaves the stage of failure unspecified', async () => {
+  const result=await crossRetailerPlans([{retailerId:'paguemenos',status:'source_failed'}],
+    [{query:'A'},{query:'B'}],assert.fail);
+  assert.deepEqual(result.lookupFailures,[]);
+  assert.ok(result.partialBasket.unfilled.every(line=>line.outcomes[0].reason==='lookup_failed'));
+});
