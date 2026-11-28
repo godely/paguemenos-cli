@@ -1,8 +1,8 @@
 // Match only the retailer's checkout identifiers observed in its own store directory.
 export function directoryId(retailer, method) {
+  if (retailer === 'drogariasaopaulo') return method.directoryBranchId ?? null;
   const id = method.pickupPointId ?? '';
-  const pattern = retailer === 'paguemenos' ? /^paguemenos(\d+)_[\w-]+$/i :
-    retailer === 'drogariasaopaulo' ? /^(?:drogariasaopaulo|drogariasp)[\w-]*_(\d+)$/i : null;
+  const pattern = retailer === 'paguemenos' ? /^paguemenos(\d+)_[\w-]+$/i : null;
   const match = pattern?.exec(id);
   return match ? match[1].replace(/^0+(?=\d)/, '') : null;
 }
@@ -24,11 +24,15 @@ function atBranch(retailer, branch, quote, offer, quantity) {
   const methods = exact && quote.localStatus === 'available' ? pickup.filter(m => directoryId(retailer,m) === String(branch.id)) : [];
   let pickupAtStore = 'unconfirmed';
   if (methods.length) pickupAtStore = 'offered';
+  else if (exact && (quote.localStatus === 'lookup_failed' || quote.pickupVerification?.status === 'directory_failed')) pickupAtStore = 'lookup_failed';
+  else if (exact && quote.pickupVerification?.status === 'incomplete') pickupAtStore = 'unconfirmed';
+  else if (exact && quote.pickupVerification?.status === 'verified' && quote.pickupVerification.otherBannerPoints > 0 && !pickup.length) pickupAtStore = 'not_offered';
   else if (exact && (quote.localStatus === 'unavailable' || (quote.localStatus === 'available' &&
       Array.isArray(quote.methods) && quote.methods.length && pickup.every(m => directoryId(retailer,m) !== null)))) pickupAtStore = 'not_offered';
   const price = methods.length ? quote : offer;
   return {...price, methods, requestedQuantity:quantity, branchQuantity:null, pickupAtStore,
-    localStatus:methods.length ? 'available' : 'unverified'};
+    ...(exact && quote.pickupVerification && {pickupVerification:quote.pickupVerification}),
+    localStatus:pickupAtStore === 'lookup_failed' ? 'lookup_failed' : methods.length ? 'available' : 'unverified'};
 }
 
 // The directory is read once per shopping request, only once checkout is needed.

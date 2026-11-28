@@ -14,15 +14,17 @@ const delivery = {channel:'delivery'};
 for (const [retailer,near,far] of [['paguemenos','paguemenos00004_abcd','paguemenos00008_efab'],
   ['drogariasaopaulo','drogariaspcentro_4','drogariasaopaulocentro2_8']]) {
   test(retailer + ' verifies only the closest directory store, seller and requested number of packs', async () => {
+    const identified = (id, branchId) => ({...pickup(id), ...(retailer === 'drogariasaopaulo' && {directoryBranchId:branchId})});
+    const nearMethod = identified(near,'4'), farMethod = identified(far,'8');
     let row, directoryCalls=0;
     const source=fixedStoreSource(retailer,{stores:async p=>{assert.equal(p,origin); directoryCalls++; return directory},
       local:async()=>row},origin,'nearest');
-    row=localQuote([pickup(far),delivery,pickup(near)]);
+    row=localQuote([farMethod,delivery,nearMethod]);
     const yes=await source.local(offer,origin,2);
-    assert.deepEqual(yes.methods,[pickup(near)]);
+    assert.deepEqual(yes.methods,[nearMethod]);
     assert.equal(yes.pickupAtStore,'offered'); assert.equal(yes.branchQuantity,null);
     assert.equal(yes.currentPrice,12);
-    for(const methods of [[pickup(far)], [delivery]]) {
+    for(const methods of [[farMethod], [delivery]]) {
       row=localQuote(methods);
       const no=await source.local(offer,origin,2);
       assert.equal(no.pickupAtStore,'not_offered'); assert.equal(no.currentPrice,16);
@@ -93,4 +95,22 @@ test('a fixed branch can offer pickup while its physical quantity remains unknow
   assert.equal(result.products[0].branchQuantity,null);
   assert.equal(result.purchase.coverage.canExpand,false);
   assert.equal(result.purchase.stockEvidence,'no_branch_inventory_source');
+});
+
+test('a shared checkout distinguishes other banners, unresolved identities and failed lookups',async()=>{
+  let row;
+  const source=fixedStoreSource('drogariasaopaulo',{stores:async()=>directory,local:async()=>row},origin,'nearest');
+  for (const [localStatus,status,otherBannerPoints,methods,expected] of [
+    ['unverified','verified',1,[],'not_offered'],
+    ['available','incomplete',1,[delivery],'unconfirmed'],
+    ['available','directory_failed',0,[delivery],'lookup_failed'],
+    ['available','incomplete',0,[{...pickup('alternate_4'),directoryBranchId:'4'}], 'offered'],
+    ['available','verified',0,[pickup('drogariaspwrong_4')], 'unconfirmed'],
+  ]) {
+    row={...localQuote(methods),localStatus,pickupVerification:{status,otherBannerPoints}};
+    const result=await source.local(offer,origin,2);
+    assert.equal(result.pickupAtStore,expected);
+    assert.equal(result.branchQuantity,null);
+    assert.equal(result.pickupVerification.status,status);
+  }
 });

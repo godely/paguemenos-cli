@@ -57,7 +57,7 @@ export function hasPickupOffer(quote) {
 export function permitsStockExpansion(quote) {
   const rows = quote.products ?? quote.items ?? [];
   return !['source_failed','partial','lookup_failed','unverified','unconfirmed'].includes(quote.status) &&
-    !rows.some(row => row.localStatus === 'lookup_failed') && !hasPickupOffer(quote);
+    !rows.some(row => row.localStatus === 'lookup_failed' || (row.pickupVerification && row.pickupVerification.status !== 'verified')) && !hasPickupOffer(quote);
 }
 
 export async function physicalShopping(retailer, source, items, selections, origin, {store, expandSearch=false, includeBranchChoices=false, allowExpansion=true}={}, config) {
