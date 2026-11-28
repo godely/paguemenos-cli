@@ -1,3 +1,6 @@
+import { readFile } from 'node:fs/promises';
+import { gunzip } from 'node:zlib';
+import { promisify } from 'node:util';
 import { checkoutOrigin } from './location.js';
 
 function number(value, min, max) {
@@ -11,7 +14,17 @@ function phone(area, local) {
   return /^\d{2}$/.test(String(area).trim()) ? area + ' ' + String(local).trim() : String(local).trim();
 }
 
+const decompress = promisify(gunzip);
+
+export async function nationalDirectory() {
+  const file = new URL('./data/stores.json.gz',import.meta.url);
+  const snapshot = JSON.parse(await decompress(await readFile(file)));
+  return {...snapshot, status:'checked', scope:'national_observed', order:'directory',
+    stores:snapshot.stores.map(store=>({...store, directoryObservedAt:snapshot.observedAt, directoryScope:'national_observed'}))};
+}
+
 export async function stores(origin, request = fetch) {
+  if (origin === undefined) return (await nationalDirectory()).stores;
   const location = checkoutOrigin(origin);
   const route = location.postalCode
     ? 'get-store-base-by-address/' + location.postalCode
@@ -22,6 +35,10 @@ export async function stores(origin, request = fetch) {
   const data = await response.json();
   const rows = location.postalCode ? data : data.sortedStores;
   if (!Array.isArray(rows)) throw new Error('Unexpected Pague Menos store directory');
+  return directoryBranches(rows);
+}
+
+export function directoryBranches(rows) {
   const branches = new Map();
   for (const row of rows) {
     const id = String(row.cod_loja ?? '').trim();

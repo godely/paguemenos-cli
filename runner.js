@@ -63,7 +63,7 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
       /^-\d/.test(x) && ['--lat','--lon'].includes(args[i-1]) ? [] : [x]);
     ({values:v,positionals:words} = parseArgs({args,allowPositionals:true,options}));
     if (command !== 'stores' && !words.length) throw Error(usage[command]);
-    if (command === 'stock' || command === 'plan' || (command === 'stores' && (source.directoryScope==='near_origin' || v.cep || v.lat || v.lon))) origin=location(v);
+    if (command === 'stock' || command === 'plan' || (command === 'stores' && (source.directoryScope==='near_origin' || [v.cep,v.lat,v.lon].some(x=>x!==undefined)))) origin=location(v);
     if (command === 'stores' && words.length) throw Error(usage.stores);
     if (command === 'compare' && [v.cep,v.lat,v.lon].some(x=>x!==undefined)) origin=location(v);
     if (v.store != null && (!origin || (v.store !== 'nearest' && (command !== 'compare' || !/^\d+$/.test(v.store)))))
@@ -228,7 +228,11 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     return;
   }
   if(command==='stores') {
-    const stores=await source.stores(origin);
+    const national = origin === undefined && source.nationalDirectory ? await source.nationalDirectory() : null;
+    const stores = national?.stores ?? await source.stores(origin);
+    if (national && !v.json)
+      console.log('O localizador da rede publicou '+stores.length+' filiais nas '+national.coverage.states+
+        ' UFs no levantamento de '+national.observedAt.slice(0,10)+'. A cobertura integral da rede está por confirmar.');
     if(v.json) console.log(JSON.stringify(stores,null,2));
     else console.table(stores.map(s=>({id:s.id,name:s.storeName,address:[s.address.street,s.address.number].filter(Boolean).join(', '),
       city:s.address.city,lat:s.address.latitude,lon:s.address.longitude,km:s.distanceKm,phone:s.phone,

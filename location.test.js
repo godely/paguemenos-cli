@@ -19,7 +19,7 @@ test('Pague Menos locator excludes other banners and preserves unknown coordinat
     {cod_loja:2,bandeira:'EXTRAFARMA',nome_loja:'Centro'},
   ]));
   assert.deepEqual(rows.map(s=>s.id),['1']); assert.equal(rows[0].address.latitude,null);
-  await assert.rejects(stores(undefined),/valid CEP/);
+  await assert.rejects(stores(''),/valid CEP/);
 });
 test('one partner basket checks every selected line together after brand consent', async ()=>{
   const {quoteShoppingList,shoppingItems}=await import('./partner-plan.js');
