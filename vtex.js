@@ -15,9 +15,9 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
     return response;
   }
 
-  function checkPage(page, limit) {
-    if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
-      throw new TypeError('page must be positive and limit must be 1 to 50');
+  function checkPage(page, limit, maximum=50) {
+    if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > maximum) {
+      throw new TypeError('page must be positive and limit must be 1 to '+maximum);
     }
   }
 
@@ -54,9 +54,9 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
   }
 
   async function search(query, page = 1, limit = 20) {
-    checkPage(page, limit);
-    if (!prepareSearch) return catalog({ ft: query }, page, limit);
-    const { text, matches } = prepareSearch(query);
+    checkPage(page, limit, 1000);
+    if (!prepareSearch && limit<=50) return catalog({ ft: query }, page, limit);
+    const { text, matches } = prepareSearch?.(query) ?? {text:query,matches:()=>true};
     const start = (page - 1) * limit;
     const rows = [];
     let matched = 0;
