@@ -8,7 +8,7 @@ export function validGtin(code) {
   return digits.reduce((sum, n, i) => sum + n * (i % 2 ? 3 : 1), 0) % 10 === 0;
 }
 
-export function createRetailer({ name, site, prepareSearch }, request = fetch) {
+export function createRetailer({ name, site, prepareSearch, compositionEvidence }, request = fetch) {
   async function getResponse(path, options = {}) {
     const response = await request(new URL(path, site), { ...options, signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(name + ' HTTP ' + response.status);
@@ -39,8 +39,11 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
 
   function catalogIdentity(product, item, page) {
     const facts = Object.fromEntries((product.allSpecifications ?? []).map(key => [key, product[key]]));
+    const makers = [...new Set([facts.Fabricante].flat().filter(v => typeof v === 'string' && v.trim()).map(v => v.trim()))];
     return { retailer:name, sku:String(item.itemId), gtin:validGtin(String(item.ean)) ? String(item.ean) : null,
       name:item.nameComplete || item.name, itemName:item.name, brand:product.brand, productUrl:product.link,
+      ...(makers.length === 1 && {manufacturer:makers[0]}),
+      ...compositionEvidence?.(product, item, facts),
       categoryPaths:(product.categories ?? []).filter(path => typeof path === 'string'),
       sourceUrl:page.sourceUrl, observedAt:page.observedAt, facts };
   }
