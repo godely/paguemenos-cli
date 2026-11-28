@@ -65,7 +65,7 @@ export async function run(source, argv, bin) {
     if (command==='plan') items=shoppingItems(words,v);
     if (command==='snapshot' && (!['collect','read','export'].includes(words[0]) || words.length<2 || !Number.isSafeInteger(Number(v.offset??0)) || Number(v.offset??0)<0)) throw Error(usage.snapshot);
   } catch(error) { return usageError(error.message); }
-  const query=words.join(' '), limit=Number(v.limit??20), columns=['sku','name','seller','currentPrice','inStock'];
+  const query=words.join(' '), limit=Number(v.limit??20), columns=['sku','name','type','seller','currentPrice','inStock'];
   if (command==='plan') {
     const result=await quoteShoppingList(bin,source,items,origin);
     if(v.json) console.log(JSON.stringify(result,null,2));
@@ -135,7 +135,7 @@ export async function run(source, argv, bin) {
     for (const sku of new Set(words)) batches.set(sku, await source.product(sku));
     const slots=words.map(sku=>batches.get(sku).length?batches.get(sku):null);
     if(v.json) console.log(JSON.stringify(slots,null,2));
-    else emit(slots.flatMap((slot,i)=>slot??[{sku:words[i],name:'not found'}]),false,columns);
+    else emit(slots.flatMap((slot,i)=>slot?.map(row=>({...row,type:catalogType(row)}))??[{sku:words[i],name:'not found'}]),false,columns);
     if(slots.includes(null)) process.exitCode=3;
     return;
   }
@@ -156,8 +156,8 @@ export async function run(source, argv, bin) {
     }
   }
   if(command==='stock' && !v.json) printQuotes(rows);
-  else emit(rows,v.json,columns);
-  if(!rows.length) process.exitCode=3;
+  else emit(v.json?rows:rows.map(row=>({...row,type:catalogType(row)})),v.json,columns);
+  if((!rows.length && command!=='search') || (command==='stock' && rows.length && rows.every(row=>row.localStatus==='unavailable'))) process.exitCode=3;
 }
 
 function printQuotes(rows) {

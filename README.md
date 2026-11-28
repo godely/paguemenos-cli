@@ -11,7 +11,7 @@ node cli.js info 1633706
 node cli.js stock 1633706 --cep "$CEP"
 ```
 
-`suggest` returns search terms from the public VTEX autocomplete endpoint. It uses no storefront API key and merges spelling variants such as `10 mg` and `10mg`. An empty first search page prompts with the first alternative. Run `search` with the chosen term to see products. With `--json`, results go to stdout and the hint goes to stderr. Exit code 3 means an empty result.
+`suggest` returns search terms from the public VTEX autocomplete endpoint. It uses no storefront API key and merges spelling variants such as `10 mg` and `10mg`. An empty first search page prompts with the first alternative. Run `search` with the chosen term to see products. With `--json`, results go to stdout and the hint goes to stderr. A completed search returns exit code 0, including an empty page. A missing product or a confirmed unavailable stock request returns exit code 3.
 
 `search` checks whole words against the start of the SKU title, the catalog brand, or the active ingredient. It checks additional words and quantities against the title and structured fields. Mentions in descriptions and autocomplete preview cards do not qualify a product. Missing identity evidence can omit a relevant product. Pagination counts matching catalog products. Each can contain several matched SKUs or sellers. The library exposes the same operations as `retailer.suggest(prefix, limit)` and `retailer.search(query, page, limit)`.
 
