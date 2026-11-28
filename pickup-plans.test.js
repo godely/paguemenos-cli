@@ -176,3 +176,36 @@ for (const retailer of ['paguemenos','drogariasaopaulo']) {
     } finally {process.exitCode=old;}
   });
 }
+
+test('a partial checkout keeps confirmed options and distinguishes a failed pickup check from an inconclusive reply', async () => {
+  const id='paguemenos';
+  const lines=[{query:'A'},{query:'B'},{query:'C'}];
+  const tables=lines.map(()=>({status:'matches',choices:[{}]}));
+  const quote=(localStatus,methods=[])=>({sku:'3',requestedQuantity:1,currentPrice:9,localStatus,methods});
+  for (const [first,reason] of [
+    [{status:'source_failed'},'lookup_failed'],
+    [{status:'partial',items:[quote('lookup_failed')]},'lookup_failed'],
+    [{status:'unresolved_items',pending:[{status:'source_failed'}]},'lookup_failed'],
+    [{status:'unresolved_items',pending:[{status:'choose_seller'}]},'pickup_unknown'],
+    [{status:'unverified'},'pickup_unknown'],
+    [{status:'fulfillable',items:[{...quote('available'),pickupVerification:{status:'incomplete'}}]},'pickup_unknown'],
+  ]) {
+    const plans=await crossRetailerPlans([{retailerId:id,tables}],lines,async (_,indices)=>{
+      if (indices.length>1) return {status:'unavailable',items:[]};
+      if (indices[0]===0) return first;
+      if (indices[0]===1) return {status:'unavailable',items:[quote('unavailable')]};
+      return {status:'fulfillable',items:[quote('available',[method('Centro')])]};
+    });
+    assert.deepEqual(plans.lookupFailures,[{retailerId:id,itemIndices:[0],reason}]);
+    const [partial]=plans.partialBasket.plans;
+    assert.equal(partial.stops[0].pickups[0].item,2);
+    assert.deepEqual(partial.unfilled.map(line=>line.outcomes[0].reason),[reason,'pickup_not_offered']);
+  }
+});
+
+test('a chain-wide lookup failure before checkout leaves the stage of failure unspecified', async () => {
+  const result=await crossRetailerPlans([{retailerId:'paguemenos',status:'source_failed'}],
+    [{query:'A'},{query:'B'}],assert.fail);
+  assert.deepEqual(result.lookupFailures,[]);
+  assert.ok(result.partialBasket.unfilled.every(line=>line.outcomes[0].reason==='lookup_failed'));
+});
