@@ -16,6 +16,28 @@ export function matchesRequestedBrand(product,requested) {
   return (' '+family+' ').includes(' '+brand+' ') && (' '+words(product.name)+' ').includes(' '+family+' ');
 }
 
+// A shopper may abbreviate a generic manufacturer to the first complete word.
+// Take a shortened name only when the product title confirms the full catalog
+// brand and exactly one distinct brand in this presentation fits it.
+export function selectBrandOptions(products, requested, includeGenerics) {
+  const exact = products.filter(p => matchesRequestedBrand(p,requested));
+  const accepted = new Set(exact);
+  const short = words(requested);
+  if (!exact.length && /^\p{L}{4,}$/u.test(short) &&
+      !['laboratorio','laboratorios','industria','grupo','generico','pharma','farma'].includes(short)) {
+    const candidates = products.filter(p => {
+      const brand = words(p.brand);
+      return p.type === 'Genérico' && brand.startsWith(short+' ') &&
+        (' '+words(p.name)+' ').includes(' '+brand+' ');
+    });
+    const names = [...new Set(candidates.map(p=>words(p.brand)))];
+    if (names.length > 1) return {needsBrandChoice:true, brands:[...new Set(candidates.map(p=>p.brand))], products:[]};
+    for (const p of candidates) accepted.add(p);
+  }
+  return {products:products.filter(p => accepted.has(p) ||
+    (includeGenerics && p.role === 'generic' && p.type === 'Genérico'))};
+}
+
 export async function quoteShoppingList(retailer, source, items, origin, resolve = resolveMedication) {
   const pendingBrands = [];
   for (const item of items) {
@@ -29,7 +51,18 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
       includeGenerics:!item.sku && Boolean(item.includeGenerics || item.genericOnly)},source);
     let rows=selection.products ?? [];
     if (item.genericOnly) rows=rows.filter(p=>p.type==='Genérico');
-    if (item.brand) rows=rows.filter(p=>matchesRequestedBrand(p,item.brand) || (item.includeGenerics && p.role==='generic' && p.type==='Genérico'));
+    if (item.brand && rows.length) {
+      const choice = selectBrandOptions(rows,item.brand,item.includeGenerics);
+      if (choice.needsBrandChoice) {
+        tables.push({query:item.query,status:'choose_manufacturer',brands:choice.brands,choices:[]});
+        continue;
+      }
+      rows = choice.products;
+      if (!rows.length) {
+        tables.push({query:item.query,status:'requested_brand_not_found',brand:item.brand,choices:[]});
+        continue;
+      }
+    }
     if (items.length === 1 && ((source.fixedStore && !selection.candidates) || selection.scope === 'direct_requested_pack' || selection.scope === 'equivalents_in_reference_catalog' || selection.scope === 'verified_drop_presentation') && rows.length) {
       const result = await quoteLocalOptions({...selection, products:rows}, source, origin, item.quantity ?? 1);
       const available = result.products.some(p => p.localStatus === 'available');
