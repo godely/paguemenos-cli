@@ -1,4 +1,4 @@
-import { quoteShoppingList, shoppingItems } from './partner-plan.js';
+import { planShoppingList, shoppingItems } from './partner-plan.js';
 import { parseArgs } from 'node:util';
 import { catalogInfo, catalogSnapshot, catalogType, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
 import { compareOffers } from './compare.js';
@@ -67,8 +67,26 @@ export async function run(source, argv, bin) {
   } catch(error) { return usageError(error.message); }
   const query=words.join(' '), limit=Number(v.limit??20), columns=['sku','name','type','seller','currentPrice','inStock'];
   if (command==='plan') {
-    const result=await quoteShoppingList(bin,source,items,origin);
+    const result=await planShoppingList(bin,source,items,origin);
     if(v.json) console.log(JSON.stringify(result,null,2));
+    else if (result.pickupPlans?.plans.length) {
+      const titles={both:'Menos lojas e menor preço estimado',fewest_stores:'Menos lojas',lowest_price:'Menor preço estimado'};
+      const money=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'});
+      for (const plan of result.pickupPlans.plans) {
+        const total=plan.totalBRL == null ? 'total a confirmar' : money.format(plan.totalBRL);
+        const distance=plan.roundTripKm == null ? 'distância a confirmar' : plan.roundTripKm.toFixed(2)+' km de ida e volta em linha reta';
+        console.log(titles[plan.objective]+' · '+total+' · '+distance);
+        for (const [i,stop] of plan.stops.entries()) {
+          const address=[stop.address?.street,stop.address?.number].filter(Boolean).join(', ');
+          console.log((i+1)+'. '+[stop.name,address].filter(Boolean).join(' — '));
+          for (const p of stop.pickups) console.log('   '+p.packs+' × '+p.name);
+        }
+      }
+      const difference=result.pickupPlans.comparison;
+      if (difference) console.log('Economia estimada de '+money.format(difference.savingsBRL)+' com '+difference.extraStops+' parada(s) a mais.');
+      console.log('Retirada confirmada para a quantidade pedida. Frete e taxas à parte.');
+      if (result.pickupPlans.searchLimited || result.pickupPlans.lookupFailures.length) console.log('Comparação parcial entre as opções verificadas.');
+    }
     else if (result.planningScope === 'one_pack_alternatives') {
       if (result.lowestPricedPickup) console.log('Menor preço com retirada confirmada:', result.lowestPricedPickup.name,
         '—', result.lowestPricedPickup.currentPrice.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}));
@@ -82,7 +100,7 @@ export async function run(source, argv, bin) {
       if(result.commonPickupPoints?.length) console.table(result.commonPickupPoints);
       if(result.estimatedProductTotalBRL!=null) console.log('Subtotal estimado (BRL)',result.estimatedProductTotalBRL);
     }
-    if(result.status!=='fulfillable') process.exitCode=result.status==='source_failed' || result.pending?.some(p=>p.status==='source_failed')?2:3;
+    if(result.status!=='fulfillable' && result.pickupPlans?.status!=='complete') process.exitCode=result.status==='source_failed' || result.pending?.some(p=>p.status==='source_failed')?2:3;
     return;
   }
   if (command==='snapshot') {

@@ -14,12 +14,13 @@
     "./vtex": "./vtex.js",
     "./runner": "./runner.js",
     "./compare": "./compare.js",
-    "./plan": "./partner-plan.js"
+    "./plan": "./partner-plan.js",
+    "./pickup-plans": "./pickup-plans.js"
   },
   "scripts": {
     "test": "node --test"
   },
   "dependencies": {
-    "drogasil-cli": "https://codeload.github.com/godely/drogasil-cli/tar.gz/97a0f36ae9a91fadef2d81f3498f5e362c85f631"
+    "drogasil-cli": "https://codeload.github.com/godely/drogasil-cli/tar.gz/c69fb114e78d77c77c527f0e1118641d8c56fd9a"
   }
 }
