@@ -60,3 +60,27 @@ test('brand-first display and the lowest eligible pickup price are independent i
     assert.equal(result.lowestPricedPickup.requestedQuantity,2);
   }
 });
+
+test('a comparable registered pack has its own quote and cannot fill a missing similar brand',async()=>{
+  const product={sku:'generic',sellerId:'1',name:'Medicamento genérico',role:'presentation_comparison'};
+  const selection={status:'presentation_comparison',products:[],comparisonOptions:[product]};
+  const branch={id:'12',name:'Loja Centro',distanceKm:1};
+  let calls=0;
+  const source={stores:async()=>[branch],local:async(row,origin,quantity)=>{
+    calls++;return {...row,requestedQuantity:quantity,localStatus:'available',methods:[
+      {channel:'pickup-in-point',pickupPointId:'paguemenos12_a',branch:branch.name,distanceKm:1},
+      {channel:'pickup-in-point',pickupPointId:'paguemenos17_a',branch:'Outra loja',distanceKm:2},
+    ]};
+  }};
+  const catalog=await compareOffers({},source,async()=>selection);
+  assert.equal(calls,0); assert.equal(catalog.comparisonOptions[0],product);
+  const result=await compareOffers({retailer:'paguemenos',zipcode:'01001000',store:'nearest'},source,async()=>selection);
+  assert.deepEqual(result.products,[]); assert.equal(calls,1);
+  assert.equal(result.comparisonOptions[0].pickupAtStore,'offered');
+  assert.equal(result.comparisonOptions[0].methods.length,1);
+  assert.equal(result.comparisonOptions[0].branchQuantity,null);
+  assert.equal(result.fixedStore.branch.name,branch.name);
+  const failed=await compareOffers({zipcode:'01001000'},{local(){throw Error('offline')}},async()=>selection);
+  assert.equal(failed.comparisonQuoteStatus,'source_failed');
+  assert.equal(failed.comparisonOptions[0].localStatus,'lookup_failed');
+});
