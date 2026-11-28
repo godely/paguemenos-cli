@@ -1,6 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRetailer, validGtin } from './vtex.js';
+test('large user pages span bounded source pages and preserve all sellers for each product', async () => {
+  const windows=[];
+  const source=createRetailer({name:'Example',site:'https://example.com'},async url=>{
+    const first=Number(url.searchParams.get('_from')), last=Number(url.searchParams.get('_to'));
+    windows.push([first,last]);
+    assert.ok(last-first<50);
+    const rows=Array.from({length:Math.min(125-first,last-first+1)},(_,i)=>({
+      items:[{itemId:String(first+i),sellers:[{sellerId:'a'},{sellerId:'b'}]}]
+    }));
+    return Response.json(rows);
+  });
+  const page=await source.search('example',2,60);
+  assert.equal(page.length,120);
+  assert.deepEqual([page[0].sku,page.at(-1).sku],['60','119']);
+  const all=await source.search('example',1,1000);
+  assert.equal(all.length,250);
+  await assert.rejects(source.search('example',1,1001),/limit/);
+});
 test('exact GTIN filters other variants, missing SLAs keep the price online-only', async () => {
   const offer = { sellerId: '1', sellerName: 'Example', commertialOffer: { Price: 12.5, ListPrice: 15, IsAvailable: true } };
   const item = { itemId: '12', ean: '7899547543766', name: 'Example pack', sellers: [offer] };

@@ -12,9 +12,14 @@
   "exports": {
     ".": "./index.js",
     "./vtex": "./vtex.js",
-    "./runner": "./runner.js"
+    "./runner": "./runner.js",
+    "./compare": "./compare.js",
+    "./plan": "./partner-plan.js"
   },
   "scripts": {
     "test": "node --test"
+  },
+  "dependencies": {
+    "drogasil-cli": "https://codeload.github.com/godely/drogasil-cli/tar.gz/235daba1a2cddc58cade31c5a93c4d67049f539b"
   }
 }
