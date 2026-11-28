@@ -137,3 +137,24 @@ test('standalone catalog checks Pague Menos ingredient evidence before exposing 
   assert.deepEqual(result.map(hit=>hit.name),['Prednisona 20mg','Outro produto']);
   assert.deepEqual(result.map(hit=>hit.ingredientEvidence.source),['retailer_title','retailer_field']);
 });
+
+for (const retailer of ['paguemenos','drogariasaopaulo']) {
+  test(retailer+' info prints the full presentation and distinguishes missing and conflicting evidence', async t => {
+    const source = {facts:async query => query === 'Ausente' ? [] : [{
+      sku:'1', name:'Marca 2 mg 20 comprimidos', type:'Referência', productUrl:'https://example.test/ficha',
+      facts:{Fabricante:['Fabricante X'], 'Princípio Ativo':['Substância X'], 'Via de Administração':['Oral','Tópica'],
+        'Tipo de Liberação':['Prolongada'], 'Tipo de Receita':['Venda sob prescrição médica','Venda livre']},
+    }]};
+    const output = t.mock.method(console, 'log', () => {});
+    const previous = process.exitCode;
+    try {
+      await run(source,['info','Marca','Ausente'],retailer,{choicesFor:async () => []});
+      const text = output.mock.calls.map(call => call.arguments[0]).join('\n');
+      for (const fact of ['Referência','Substância X','2 mg','Via: não confirmada','Oral, Tópica',
+        'Liberação: Prolongada','Embalagem: 20 comprimidos','Fabricante X','https://example.test/ficha',
+        'Precisa de receita? não confirmado','A farmácia retém? não confirmado','Qual receituário? não confirmado',
+        'As fontes divergem','Nenhuma apresentação encontrada']) assert.ok(text.includes(fact),fact);
+      assert.equal(process.exitCode,3);
+    } finally {process.exitCode = previous;}
+  });
+}

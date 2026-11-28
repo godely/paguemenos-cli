@@ -3,7 +3,7 @@ import {hasPickupOffer} from './branch-shopping.js';
 import { confirmCliNames } from 'drogasil-cli/cli-name-confirmation';
 import { planShoppingList, shoppingItems } from './partner-plan.js';
 import { parseArgs } from 'node:util';
-import { renderPurchase, purchaseExitCode, acceptExpansion, retailerComparison, catalogInfo, catalogSnapshot, catalogType, requestsDrops, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
+import { renderInfoResult, infoExitCode, renderPurchase, purchaseExitCode, acceptExpansion, retailerComparison, catalogInfo, catalogSnapshot, catalogType, requestsDrops, runSnapshotCommand } from 'drogasil-cli/retailer-workflows';
 import { inventoryConfig, lookupBranchStock } from './branch-inventory.js';
 import { compareOffers } from './compare.js';
 import { checkoutOrigin, point } from './location.js';
@@ -166,13 +166,11 @@ export async function run(source, argv, bin, {choicesFor} = {}) {
     }
     const data=await catalogInfo({retailer:bin,queries:words,scope:v.brazil?'brazil':'catalog'},source);
     if (v.json) console.log(JSON.stringify(data,null,2));
-    else for (const result of data.results) {
-      console.log(result.query, result.status);
-      console.table(result.products.map(p=>({name:p.name, strengths:p.strengths.join(', '),forms:p.forms.join(', '),prescription:p.prescriptionLabel.join(', ')||'não confirmado',retention:p.prescription.retained === null ? (p.retentionLabel.join(', ')||'não confirmado') : p.prescription.retained ? 'Sim' : 'Não',receituário:p.prescription.form||'não confirmado',norma:p.prescription.rule,source:p.source})));
-      if(v.brazil) console.log(JSON.stringify(result.brazil??{status:'não confirmado'},null,2));
+    else {
+      const retailerName = bin === 'paguemenos' ? 'Pague Menos' : 'Drogaria São Paulo';
+      for (const result of data.results) console.log(renderInfoResult(result, retailerName));
     }
-    if(data.results.some(r=>['source_failed','partial'].includes(r.status)||r.nationalStatus==='source_failed')) process.exitCode=2;
-    else if(data.results.some(r=>r.status!=='matches' && !r.brazil?.presentations?.length)) process.exitCode=3;
+    process.exitCode = infoExitCode(data.results);
     return;
   }
   if (command==='compare') {
