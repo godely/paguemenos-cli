@@ -158,3 +158,15 @@ for (const retailer of ['paguemenos','drogariasaopaulo']) {
     } finally {process.exitCode = previous;}
   });
 }
+
+test('a retail brand following its product line preserves volume and excludes unrelated merchandise',()=>{
+  const product={brand:'Dauf',name:'Solução Fisiológica Dauf Pro Soro 0,9% 500ml',facts:{}};
+  for(const query of ['Dauf Pro Soro 500 mL','Pro Soro Dauf 500 mL']) assert.ok(prepareSearch(query).matches(product));
+  for(const query of ['Pro Soro Dauf 100 mL','Pro Soro Dauf 10mg','Pro Soro Outramarca 500 mL']) {
+    assert.equal(prepareSearch(query).matches(product),false);
+  }
+  const match=prepareSearch('Pro Soro Dauf 500 mL').matches;
+  assert.equal(match({...product,name:'Acessório para Dauf Pro Soro 500 ml'}),false);
+  assert.equal(match({...product,name:'Dauf Pro Soro 2 x 500 ml'}),false);
+  assert.equal(match({...product,name:'Cloreto de Sódio Dauf 500ml',description:product.name}),false);
+});
