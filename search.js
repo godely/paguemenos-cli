@@ -1,4 +1,5 @@
 import { medicationIntent, verifiedRow } from 'drogasil-cli/medication-catalog';
+import { documentedSublingual, normalizeSublingual, presentationSearchTerms, requestsSublingual } from 'drogasil-cli/retailer-workflows';
 
 const fold = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 const connectors = new Set(['a', 'de', 'da', 'do', 'em', 'com', 'e']);
@@ -6,7 +7,7 @@ const isDose = word => /^\d+(?:\.\d+)?(?:mg|mcg|ui|g|%)(?:\/|$)/.test(word);
 
 // Keep a dose/concentration together so "10 mg" cannot match "110 mg" or "10 mg/mL".
 function words(value) {
-  return (fold(value).replace(/(\d),(?=\d)/g, '$1.')
+  return (normalizeSublingual(fold(value)).replace(/(\d),(?=\d)/g, '$1.')
     .match(/\d+(?:\.\d+)?\s*(?:mcg|mg|kg|ml|ui|g|l|%)(?:\s*\/\s*(?:\d+(?:\.\d+)?\s*)?(?:ml|mg|g|l|h|dose))?(?![a-z])|[a-z]+|\d+(?:\.\d+)?/g) ?? [])
     .map(word => word.replace(/\s/g, '')).filter(word => !connectors.has(word));
 }
@@ -14,7 +15,8 @@ function words(value) {
 export function prepareSearch(query) {
   // Searching VTEX for a detached "mg" also retrieves hundreds of unrelated
   // medicines. Fetch the name, then check the original presentation on each SKU.
-  const text = query.split(/\s+(?=\d)/, 1)[0];
+  const term = requestsSublingual(query) ? presentationSearchTerms(query) || query : query;
+  const text = term.split(/\s+(?=\d)/, 1)[0];
   const requested = words(query);
   const strengths = requested.filter(isDose);
   function matches(row) {
@@ -40,7 +42,9 @@ export function prepareSearch(query) {
     }
     const presentation = [facts.Apresentação, facts['Tipo de Liberação']].flat().join(' ');
     const evidence = new Set([...title, ...brand, ...ingredients, ...doseEvidence, ...words(presentation)]);
-    return requested.every(word => evidence.has(word));
+    return requested.every(word => word === 'sublingual'
+      ? documentedSublingual(row.name, facts['Forma Farmacêutica'] ?? facts.Apresentação, facts['Via de Administração'] ?? facts['Forma de Administração'])
+      : evidence.has(word));
   }
   return { text, matches };
 }

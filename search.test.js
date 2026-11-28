@@ -6,6 +6,14 @@ import { run } from './runner.js';
 
 const site = 'https://example.com';
 const seller = { sellerId: '1', commertialOffer: {} };
+test('sublingual suggestions retrieve the brand and verify the individual pack', () => {
+  const {text, matches} = prepareSearch('Rivotril sublingual 0,25 mg');
+  assert.equal(text,'Rivotril');
+  const row = {name:'Rivotril 0,25 mg 30 comprimidos',facts:{'Via de Administração':['Via oral','Sublingual']}};
+  assert.equal(matches(row),false);
+  assert.equal(matches({...row,name:row.name+' sublinguais'}),true);
+  assert.equal(matches({...row,name:'Rivotril 2 mg 30 comprimidos sublinguais'}),false);
+});
 function product(id, name, ingredient) {
   return {
     allSpecifications: ['NomeSubstanciaPrincipioAtivo'], NomeSubstanciaPrincipioAtivo: [ingredient],
