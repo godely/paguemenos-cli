@@ -1,3 +1,4 @@
+import { checkoutOrigin } from './location.js';
 const cents = value => Number.isSafeInteger(value) && value >= 0 ? value / 100 : null;
 const price = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 
@@ -80,8 +81,9 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
     if (!/^\d+$/.test(sku)) throw new TypeError('Expected a numeric retailer SKU');
     return (await catalog({ fq: 'skuId:' + sku })).filter(p => p.sku === String(sku));
   }
-  async function basket(lines, zipcode) {
-    if (!/^\d{5}-?\d{3}$/.test(zipcode) || !Array.isArray(lines) || !lines.length || lines.length > 20) {
+  async function basket(lines, origin) {
+    const location = checkoutOrigin(origin);
+    if (!Array.isArray(lines) || !lines.length || lines.length > 20) {
       throw new TypeError('Invalid CEP or basket');
     }
     const distinct = new Map();
@@ -97,12 +99,12 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
     const requested = [...distinct.values()];
     const response = await getResponse('/api/checkout/pub/orderForms/simulation', { method: 'POST',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-        country: 'BRA', postalCode: zipcode.replace('-', ''),
+        country: 'BRA', ...location,
         items: requested.map(({offer,quantity}) => ({id:offer.sku,seller:offer.sellerId,quantity})),
       }) });
     const data = await response.json();
     if (!Array.isArray(data.items) || !Array.isArray(data.logisticsInfo)) throw new Error('Unexpected simulation response');
-    return requested.map(({offer,quantity}) => quoteLine(offer,quantity,data));
+    return requested.map(({offer,quantity}) => quoteLine(offer,quantity,data, location.geoCoordinates ? 'verified_for_coordinates' : 'verified_for_cep'));
   }
   async function local(offer, zipcode, quantity = 1) {
     const [result] = await basket([{offer,quantity}],zipcode);
@@ -111,7 +113,7 @@ export function createRetailer({ name, site, prepareSearch }, request = fetch) {
   return { name, site, search, product, byGtin, local, basket };
 }
 
-function quoteLine(offer, quantity, data) {
+function quoteLine(offer, quantity, data, verifiedScope) {
   const index = data.items.findIndex(i => String(i.id) === offer.sku && String(i.seller) === offer.sellerId);
   const item = data.items[index];
   const logistics = data.logisticsInfo.find(l => l.itemIndex === index && (l.itemId == null || String(l.itemId) === offer.sku));
@@ -119,7 +121,7 @@ function quoteLine(offer, quantity, data) {
   const verified = !!item && item.availability === 'available' && item.quantity >= quantity && slas.length > 0;
   const methods = slas.map(s => ({ channel: s.deliveryChannel, service: s.id, feeBRL: cents(s.price),
     pickupPointId: s.pickupPointId || null, branch: s.pickupStoreInfo?.friendlyName || null, address: s.pickupStoreInfo?.address || null }));
-  return { ...offer, priceScope: verified ? 'verified_for_cep' : 'anonymous_online',
+  return { ...offer, priceScope: verified ? verifiedScope : 'anonymous_online',
     localStatus: verified ? 'available' : item?.availability === 'withoutStock' ? 'unavailable' : 'unverified',
     ...(verified ? { currentPrice: cents(item.sellingPrice), listPrice: cents(item.listPrice) } : {}),
     requestedQuantity: quantity, methods: verified ? methods : [], observedAt: new Date().toISOString() };
