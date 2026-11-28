@@ -26,3 +26,21 @@ Use `info "name" "another name" --json` for retailer facts or add `--brazil` for
 `stores --cep CEP` or `stores --lat LAT --lon LON` reads the Pague Menos store locator for that origin. `stock SKU` accepts either origin and an optional `--min-qty N`. The resulting quantity is the quantity requested from checkout. A successful quote confirms that fulfillment method. Branch inventory and nationwide directory coverage remain open.
 
 `plan "item A" "item B" --cep CEP` checks the whole selected basket together. Use `--sku A=SKU`, `--quantity A=2`, or per-item brand and generic choices. Ambiguous options are returned for selection before checkout simulation. Product totals exclude fees. Common pickup points must cover all items. This workflow reports fulfillment evidence; route optimization is still tracked separately.
+
+### Optional inventory by physical branch
+
+The public locator supplies Pague Menos branch codes, distance from the requested origin, published hours and phone numbers where available. Its coverage is regional. Counts by physical branch need a separate authorized inventory source. No branch feed for either retailer has been verified. The integration can be tested privately with an operator-supplied full snapshot.
+
+The importer accepts UTF-8 CSV with a header. Each record identifies the retailer (`paguemenos` or `drogariasaopaulo`), the retailer's literal SKU in `id`, the matching public locator branch ID in `store_code`, nonnegative individual packs in `quantity`, and an observation `timestamp` with UTC offset. A blank quantity or omitted row means unknown. Preserve leading zeros on identifiers. When a provider uses different identifiers, map those identifiers before importing. A general affiliate catalog, availability word, distribution-center quantity, partial update or checkout response does not meet this input contract.
+
+```sh
+python3 branch_inventory.py import --retailer paguemenos --database "$STOCK_DB" --snapshot-at "$FEED_TIME" "$FULL_CSV"
+export PAGUEMENOS_BRANCH_STOCK_DB="$STOCK_DB"
+export PAGUEMENOS_BRANCH_STOCK_MAX_AGE_MINUTES="$AGREED_MAX_AGE_MINUTES"
+node cli.js stock "$SKU" --cep "$CEP" --all --json
+node cli.js stock "$SKU" --cep "$CEP" --expand --json
+```
+
+Each import replaces one retailer atomically. Records are indexed by retailer, SKU and branch. Reimporting identical data with the same snapshot timestamp is safe. Malformed, duplicate-key or older imports leave the prior snapshot intact. An omitted record in a successfully supplied full snapshot becomes unknown. The application requires an explicit maximum age for using a branch observation. Select it according to the source and the use case. With a source configured, existing stock quote rows gain a separate `branchInventory` field.
+
+Use `--max-branches N` for the initial 3–30 nearest branches by CEP (default 30), or `--all` to include zero and unknown quantities. The CLI can offer a wider search when every branch in the initial window explicitly reports zero and the locator returns more branches within 25 km. With opt-in, it returns up to ten qualifying branches, nearest first, with observation times and contact information. A physical-stock request without a configured source exits with status 2 and reports unknown stock.
