@@ -1,3 +1,4 @@
+import { quoteLocalOptions } from './compare.js';
 import { resolveMedication } from 'drogasil-cli';
 import { retailerComparison, retailerBasket } from 'drogasil-cli/retailer-workflows';
 
@@ -15,6 +16,14 @@ export async function quoteShoppingList(retailer, source, items, origin, resolve
     let rows=selection.products ?? [];
     if (item.genericOnly) rows=rows.filter(p=>p.type==='Genérico');
     if (item.brand) rows=rows.filter(p=>p.brand?.trim().toLocaleLowerCase('pt-BR')===item.brand.trim().toLocaleLowerCase('pt-BR'));
+    if (items.length === 1 && selection.scope === 'direct_requested_pack' && rows.length) {
+      const result = await quoteLocalOptions({...selection, products:rows}, source, origin, item.quantity ?? 1);
+      const available = result.products.some(p => p.localStatus === 'available');
+      const status = result.status === 'source_failed' ? 'source_failed' : available ? 'fulfillable' :
+        (result.status === 'partial' || result.unverified.length || result.products.some(p => p.localStatus !== 'unavailable')) ? 'unverified' : 'unavailable';
+      return { ...result, status, quoteStatus:result.status, planningScope:'one_pack_alternatives',
+        tables:[{query:item.query, status, choices:result.products}], routeStatus:'branch_inventory_unverified' };
+    }
     const choices=new Set(rows.map(p=>p.sku));
     tables.push({query:item.query,status:selection.status,choices:selection.candidates??rows});
     if (choices.size===1) lines.push({sku:rows[0].sku,quantity:item.quantity});

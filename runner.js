@@ -69,6 +69,11 @@ export async function run(source, argv, bin) {
   if (command==='plan') {
     const result=await quoteShoppingList(bin,source,items,origin);
     if(v.json) console.log(JSON.stringify(result,null,2));
+    else if (result.planningScope === 'one_pack_alternatives') {
+      if (result.lowestPricedPickup) console.log('Menor preço com retirada confirmada:', result.lowestPricedPickup.name,
+        '—', result.lowestPricedPickup.currentPrice.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}));
+      printQuotes(result.products);
+    }
     else if(result.pendingBrands) console.log('Quer considerar genéricos para '+result.pendingBrands.join(', ')+'?');
     else {
       console.log(result.status);
@@ -77,7 +82,7 @@ export async function run(source, argv, bin) {
       if(result.commonPickupPoints?.length) console.table(result.commonPickupPoints);
       if(result.estimatedProductTotalBRL!=null) console.log('Subtotal estimado (BRL)',result.estimatedProductTotalBRL);
     }
-    if(result.status!=='fulfillable') process.exitCode=result.pending?.some(p=>p.status==='source_failed')?2:3;
+    if(result.status!=='fulfillable') process.exitCode=result.status==='source_failed' || result.pending?.some(p=>p.status==='source_failed')?2:3;
     return;
   }
   if (command==='snapshot') {
